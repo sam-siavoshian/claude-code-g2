@@ -151,7 +151,10 @@ extract_token() {
 start_tunnel() {
   say "starting cloudflared tunnel..."
   : > "$TUNNEL_LOG"
-  cloudflared tunnel --url "http://localhost:$BACKEND_PORT" > "$TUNNEL_LOG" 2>&1 &
+  # Use 127.0.0.1 instead of localhost: macOS resolves `localhost` to ::1
+  # (IPv6) first, and cloudflared sticks with it — but the backend binds to
+  # 0.0.0.0 (IPv4), so the tunnel can't reach the origin.
+  cloudflared tunnel --url "http://127.0.0.1:$BACKEND_PORT" > "$TUNNEL_LOG" 2>&1 &
   TUNNEL_PID=$!
   wait_for_log "$TUNNEL_LOG" "https://[a-z0-9-]+\\.trycloudflare\\.com" "tunnel" 200
 }
@@ -228,9 +231,9 @@ probe_expect() {
 test_tunnel() {
   local url=$1 token=$2
 
-  say "verifying backend directly on localhost first..."
+  say "verifying backend directly on 127.0.0.1 first..."
   local code
-  code=$(curl -sS --max-time 3 -o /dev/null -w "%{http_code}" "http://localhost:$BACKEND_PORT/api/health" || true)
+  code=$(curl -sS --max-time 3 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$BACKEND_PORT/api/health" || true)
   [[ "$code" == "200" ]] || die "backend not reachable locally: HTTP '$code'"
 
   say "waiting for tunnel DNS to propagate..."
