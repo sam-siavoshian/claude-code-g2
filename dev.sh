@@ -286,9 +286,16 @@ TUNNEL_URL=$(extract_tunnel_url)
 start_frontend
 LAN_IP=$(lan_ip)
 
-# Both the tunnel URL and the base64url token are URL-safe by construction,
-# so we can drop them into a query string verbatim.
-SETUP_URL="http://$LAN_IP:$FRONTEND_PORT/?backend=$TUNNEL_URL&token=$TOKEN"
+# URL-encode the backend URL because some QR scanners / URL parsers get
+# confused by the literal "https://" inside a query string value. The token
+# is base64url and needs no encoding.
+if need python3; then
+  ENC_BACKEND=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$TUNNEL_URL")
+else
+  # Bun ships with everything — fall back to it.
+  ENC_BACKEND=$(bun -e "console.log(encodeURIComponent(process.argv[2]))" x "$TUNNEL_URL")
+fi
+SETUP_URL="http://$LAN_IP:$FRONTEND_PORT/?backend=$ENC_BACKEND&token=$TOKEN"
 
 test_tunnel "$TUNNEL_URL" "$TOKEN"
 

@@ -35,16 +35,57 @@ async function safeRemove(key: string): Promise<void> {
   }
 }
 
+function maskToken(tok: string | null): string {
+  if (!tok) return ''
+  if (tok.length <= 10) return tok
+  return tok.slice(0, 4) + '…' + tok.slice(-4)
+}
+
+interface DiagnoseResult {
+  url: string
+  ok: boolean
+  status?: number
+  bodySnippet?: string
+  error?: string
+  timeMs: number
+}
+
+async function runDiagnose(backendUrl: string): Promise<DiagnoseResult> {
+  const target = backendUrl.replace(/\/$/, '') + '/api/health'
+  const start = Date.now()
+  try {
+    const res = await fetch(target, { method: 'GET' })
+    const body = await res.text().catch(() => '')
+    return {
+      url: target,
+      ok: res.ok,
+      status: res.status,
+      bodySnippet: body.slice(0, 120),
+      timeMs: Date.now() - start,
+    }
+  } catch (err) {
+    return {
+      url: target,
+      ok: false,
+      error: (err as Error).message || String(err),
+      timeMs: Date.now() - start,
+    }
+  }
+}
+
 export function Connect() {
   const state = useAppState()
   const [urlInput, setUrlInput] = useState('')
   const [tokenInput, setTokenInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [diagnose, setDiagnose] = useState<DiagnoseResult | null>(null)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     void (async () => {
       // Query-string handoff: ./dev.sh puts ?backend=<tunnel>&token=<bearer>
-      // into the QR code so a single scan pre-fills both fields.
+      // into the QR code so a single scan pre-fills both fields. The backend
+      // value is URL-encoded by dev.sh, so URLSearchParams.get decodes it.
       const params = new URLSearchParams(window.location.search)
       const qsUrl = params.get('backend')
       const qsTok = params.get('token')
@@ -101,6 +142,27 @@ export function Connect() {
     store.clearCredentials()
     setUrlInput('')
     setTokenInput('')
+    setDiagnose(null)
+  }
+
+  async function onDiagnose() {
+    const url = (urlInput || state.backendUrl || '').trim()
+    if (!url) return
+    setDiagnose(null)
+    const r = await runDiagnose(url)
+    setDiagnose(r)
+  }
+
+  async function onCopyBackend() {
+    const url = state.backendUrl ?? urlInput
+    if (!url) return
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable */
+    }
   }
 
   async function onDeleteSession(id: string) {
@@ -125,6 +187,18 @@ export function Connect() {
         <p className="text-normal-body text-text-dim">
           Paste the backend URL and bearer token printed by the Mac Mini.
         </p>
+
+        {configured ? (
+          <div className="rounded bg-surface p-2 text-normal-detail text-text-dim space-y-1">
+            <div className="truncate">
+              <span className="text-text">backend</span> {state.backendUrl}
+            </div>
+            <div>
+              <span className="text-text">token</span> {maskToken(state.token)}
+            </div>
+          </div>
+        ) : null}
+
         <div className="space-y-2">
           <label className="text-normal-subtitle">Backend URL</label>
           <Input
@@ -143,16 +217,47 @@ export function Connect() {
             onChange={(e) => setTokenInput(e.target.value)}
           />
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={onSave} disabled={saving || !urlInput || !tokenInput}>
             {configured ? 'Reconnect' : 'Connect'}
           </Button>
+          <Button variant="ghost" onClick={() => void onDiagnose()} disabled={!urlInput && !state.backendUrl}>
+            Diagnose
+          </Button>
           {configured ? (
-            <Button variant="ghost" onClick={() => void onLogout()}>Logout</Button>
+            <>
+              <Button variant="ghost" onClick={() => void onCopyBackend()}>
+                {copied ? 'Copied!' : 'Copy URL'}
+              </Button>
+              <Button variant="ghost" onClick={() => void onLogout()}>Logout</Button>
+            </>
           ) : null}
         </div>
+
         {state.connectionError ? (
-          <p className="text-normal-detail text-negative">{state.connectionError}</p>
+          <div className="rounded bg-negative/10 p-2">
+            <div className="text-normal-subtitle text-negative">Connection error</div>
+            <div className="text-normal-detail text-negative break-words">{state.connectionError}</div>
+          </div>
+        ) : null}
+
+        {diagnose ? (
+          <div className="rounded bg-surface p-2 space-y-1 text-normal-detail">
+            <div className="text-normal-subtitle">Diagnose</div>
+            <div className="break-words text-text-dim">GET {diagnose.url}</div>
+            {diagnose.ok ? (
+              <div className="text-positive">
+                ✓ HTTP {diagnose.status} · {diagnose.timeMs}ms
+              </div>
+            ) : (
+              <div className="text-negative break-words">
+                ✗ {diagnose.error ?? `HTTP ${diagnose.status}`} · {diagnose.timeMs}ms
+              </div>
+            )}
+            {diagnose.bodySnippet ? (
+              <div className="break-words text-text-dim">body: {diagnose.bodySnippet}</div>
+            ) : null}
+          </div>
         ) : null}
       </Card>
 
@@ -187,6 +292,7 @@ export function Connect() {
           <li>Tap the temple once to select or record.</li>
           <li>Swipe up/down to scroll.</li>
           <li>Double-tap the temple to go back.</li>
+          <li>If connection fails, tap Diagnose — shows the raw fetch result.</li>
         </ul>
       </Card>
     </div>
