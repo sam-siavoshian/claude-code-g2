@@ -73,12 +73,12 @@ export function Connect() {
   }, [])
 
   async function checkAndBoot(url: string, token: string) {
-    const ok = await checkHealth(url, token)
-    if (ok) {
+    const result = await checkHealth(url, token)
+    if (result.ok) {
       store.setConnection('ok')
       await bootstrap()
     } else {
-      store.setConnection('error', 'health check failed')
+      store.setConnection('error', result.reason ?? 'health check failed')
     }
   }
 

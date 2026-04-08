@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useGlasses } from 'even-toolkit/useGlasses'
 import { appSplash } from './splash'
 import { toDisplayData, onGlassAction } from './selectors'
@@ -20,8 +21,40 @@ function fallbackModeAfterRecording(): AppMode {
   return store.getState().activeSessionId ? 'session' : 'sidebar'
 }
 
+// Map each AppMode to a distinct pathname. useGlasses only re-evaluates the
+// active screen when `location.pathname` changes, so we drive the "current
+// screen" by navigating whenever the store mode changes.
+const MODE_PATHS: Record<AppMode, string> = {
+  unconfigured: '/g/sidebar',
+  sidebar: '/g/sidebar',
+  'recording-new': '/g/recording-new',
+  transcribing: '/g/transcribing',
+  'picking-project': '/g/picking',
+  session: '/g/session',
+  'recording-turn': '/g/recording-turn',
+}
+
+function pathToScreen(pathname: string): string {
+  // Reverse the MODE_PATHS map to recover the screen name.
+  for (const [mode, path] of Object.entries(MODE_PATHS)) {
+    if (path === pathname) return mode
+  }
+  return 'sidebar'
+}
+
 export function AppGlasses() {
   const state = useAppState()
+  const navigate = useNavigate()
+
+  // Drive react-router from the store mode. useGlasses watches
+  // location.pathname — navigating here is how our screen router learns
+  // that the mode changed.
+  useEffect(() => {
+    const target = MODE_PATHS[state.mode]
+    if (target && window.location.pathname !== target) {
+      navigate(target, { replace: true })
+    }
+  }, [state.mode, navigate])
 
   // Force a re-render at 4 Hz while recording so the elapsed-seconds label
   // keeps ticking. The tick is NOT part of the snapshot — it only exists to
@@ -220,9 +253,10 @@ export function AppGlasses() {
     [],
   )
 
-  const deriveScreen = useCallback(() => {
-    const mode = snapshotRef.current.mode
-    return mode === 'unconfigured' ? 'sidebar' : mode
+  // Map the react-router pathname back to a screen key. Called by useGlasses
+  // whenever location.pathname changes.
+  const deriveScreen = useCallback((pathname: string) => {
+    return pathToScreen(pathname)
   }, [])
 
   useGlasses({

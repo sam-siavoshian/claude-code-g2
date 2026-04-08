@@ -29,17 +29,34 @@ async function authFetch(path: string, init: RequestInit = {}): Promise<Response
   return fetch(url + path, { ...init, headers })
 }
 
-export async function checkHealth(backendUrl: string, token: string): Promise<boolean> {
-  // We hit /config (authed) rather than /health (unauthed) because we want
-  // to verify BOTH the URL and the token in one call.
+export interface HealthResult {
+  ok: boolean
+  reason?: string
+}
+
+export async function checkHealth(backendUrl: string, token: string): Promise<HealthResult> {
   const base = backendUrl.replace(/\/$/, '')
+  // 1) Reachability check: /api/health is unauthed, so no CORS preflight.
+  //    If this fails, the URL is wrong or the backend isn't reachable.
+  try {
+    const res = await fetch(base + '/api/health', { method: 'GET' })
+    if (!res.ok) return { ok: false, reason: `health HTTP ${res.status}` }
+  } catch (err) {
+    return { ok: false, reason: `can't reach backend: ${(err as Error).message}` }
+  }
+  // 2) Auth check: /api/config needs the bearer token. This triggers a CORS
+  //    preflight; if the token is wrong we'll see 401, if CORS is broken
+  //    we'll see a network error.
   try {
     const res = await fetch(base + '/api/config', {
+      method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     })
-    return res.ok
-  } catch {
-    return false
+    if (res.status === 401) return { ok: false, reason: 'wrong bearer token (401)' }
+    if (!res.ok) return { ok: false, reason: `config HTTP ${res.status}` }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: `auth request blocked: ${(err as Error).message}` }
   }
 }
 

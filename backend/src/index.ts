@@ -26,10 +26,20 @@ app.use((req, _res, next) => {
 })
 
 // Global CORS. Bearer token is the real auth; CORS is just a browser courtesy.
+// We do NOT set Allow-Credentials because we use bearer headers, not cookies.
+// Echoing Origin + Vary: Origin handles every WebView we care about without
+// leaking wildcards with credentials.
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+  const origin = req.headers.origin
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+  }
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Type')
   res.setHeader('Access-Control-Max-Age', '86400')
   if (req.method === 'OPTIONS') {
     res.status(204).end()
