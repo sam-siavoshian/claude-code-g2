@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@import "even-toolkit/web/theme-light.css";
+@import "even-toolkit/web/typography.css";
+@import "even-toolkit/web/utilities.css";
+@source "../src";
+@source "../node_modules/even-toolkit/web";
+@source "../node_modules/even-toolkit/dist";
+
+@theme {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-light: var(--color-surface-light);
+  --color-surface-lighter: var(--color-surface-lighter);
+  --color-border: var(--color-border);
+  --color-border-light: var(--color-border-light);
+  --color-text: var(--color-text);
+  --color-text-dim: var(--color-text-dim);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-highlight: var(--color-text-highlight);
+  --color-accent: var(--color-accent);
+  --color-accent-alpha: var(--color-accent-alpha);
+  --color-accent-warning: var(--color-accent-warning);
+  --color-positive: var(--color-positive);
+  --color-positive-alpha: var(--color-positive-alpha);
+  --color-negative: var(--color-negative);
+  --color-negative-alpha: var(--color-negative-alpha);
+  --color-overlay: var(--color-overlay);
+  --color-input-bg: var(--color-input-bg);
+  --radius-default: var(--radius-default);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 100dvh;
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  max-width: 430px;
+  margin: 0 auto;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

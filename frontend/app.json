@@ -1,0 +1,12 @@
+{
+  "id": "com.samsiavoshian.ccg2",
+  "name": "Claude Code G2",
+  "version": "0.1.0",
+  "description": "Run Claude Code from your G2 glasses.",
+  "author": "Sam Siavoshian",
+  "entry": "index.html",
+  "permissions": [
+    "audio",
+    "storage"
+  ]
+}
