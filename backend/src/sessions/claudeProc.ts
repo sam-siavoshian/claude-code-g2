@@ -98,20 +98,27 @@ export class ClaudeCodeProc {
     this.rl = readline.createInterface({ input: this.child.stdout })
     this.rl.on('line', (line) => this.handleLine(line))
 
+    console.log(`[claude:${this.tag()}] start model=${this.model} resume=${this.resume} cwd=${this.cwd}`)
+
     this.child.stderr.on('data', (chunk) => {
       // The CLI sometimes prints warnings / update hints on stderr. Log but
       // do not propagate as a transcript event unless we know it's fatal.
       const text = chunk.toString()
-      if (text.trim()) console.warn(`[claude:${this.sessionId.slice(0, 8)}] ${text.trim()}`)
+      if (text.trim()) console.warn(`[claude:${this.tag()}] stderr: ${text.trim()}`)
     })
 
     this.child.on('error', (err) => {
-      console.error(`[claude:${this.sessionId.slice(0, 8)}] spawn error:`, err)
+      console.error(`[claude:${this.tag()}] spawn error:`, err)
       this.emitError(`Claude CLI spawn error: ${err.message}`)
     })
 
     this.child.on('exit', (code, signal) => {
-      console.warn(`[claude:${this.sessionId.slice(0, 8)}] exited code=${code} signal=${signal}`)
+      const expected = this.sawResult
+      if (expected) {
+        console.log(`[claude:${this.tag()}] done`)
+      } else {
+        console.warn(`[claude:${this.tag()}] exited unexpectedly code=${code} signal=${signal}`)
+      }
       // Only emit a synthetic terminal event if the CLI exited abnormally AND
       // hadn't already produced a real `result` block for the current turn.
       if (!this.sawResult && code !== 0) {
@@ -128,7 +135,10 @@ export class ClaudeCodeProc {
     })
   }
 
-  // Send a user turn. Lazily starts the process if it hasn't been started yet.
+  // Send a user turn and signal EOF so Claude exits cleanly after the result.
+  // We reap-per-turn anyway; closing stdin lets the CLI exit with code 0
+  // instead of us SIGTERM'ing it (which produced the misleading code=143
+  // "exited" log line on every successful turn).
   send(text: string): void {
     if (!this.child) {
       this.sawResult = false
@@ -145,8 +155,9 @@ export class ClaudeCodeProc {
     }) + '\n'
     try {
       this.child!.stdin.write(line)
+      this.child!.stdin.end()
     } catch (err) {
-      console.error(`[claude:${this.sessionId.slice(0, 8)}] stdin write failed:`, err)
+      console.error(`[claude:${this.tag()}] stdin write failed:`, err)
       this.emitError('Failed to send prompt to Claude CLI')
     }
   }
@@ -168,6 +179,10 @@ export class ClaudeCodeProc {
     } catch {
       /* noop */
     }
+  }
+
+  private tag(): string {
+    return this.sessionId.slice(0, 8)
   }
 
   // ---------------------------------------------------------------------------
@@ -204,12 +219,16 @@ export class ClaudeCodeProc {
         for (const block of content) {
           if (!block || typeof block !== 'object') continue
           if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+            const preview = block.text.length > 60 ? block.text.slice(0, 57) + '...' : block.text
+            console.log(`[claude:${this.tag()}] text ${JSON.stringify(preview)}`)
             this.onEvent({ kind: 'assistant_text', text: block.text, ts })
           } else if (block.type === 'tool_use' && typeof block.id === 'string') {
+            const name = typeof block.name === 'string' ? block.name : 'unknown'
+            console.log(`[claude:${this.tag()}] tool ${name}`)
             this.onEvent({
               kind: 'tool_use',
               toolUseId: block.id,
-              name: typeof block.name === 'string' ? block.name : 'unknown',
+              name,
               input: block.input ?? null,
               ts,
             })
@@ -241,9 +260,12 @@ export class ClaudeCodeProc {
 
       case 'result': {
         this.sawResult = true
+        const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'success'
+        const duration = typeof msg.duration_ms === 'number' ? ` (${msg.duration_ms}ms)` : ''
+        console.log(`[claude:${this.tag()}] result ${subtype}${duration}`)
         this.onEvent({
           kind: 'result',
-          subtype: typeof msg.subtype === 'string' ? msg.subtype : 'success',
+          subtype,
           isError: Boolean(msg.is_error),
           ts: Date.now(),
         })

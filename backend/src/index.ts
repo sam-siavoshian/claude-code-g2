@@ -17,11 +17,27 @@ const manager = new SessionManager(cfg, sse)
 
 const app = express()
 
-// -------- low-level middleware -------------------------------------------------
-app.use((req, _res, next) => {
-  // Opaque request log: method + path only, NEVER the query string (token!).
-  const path = req.path
-  console.log(`${req.method} ${path}`)
+// -------- request logger -----------------------------------------------------
+// Paths that fire constantly and would drown the signal. We still log them
+// on error (≥400) so real problems surface.
+const QUIET_PATHS = new Set(['/api/health', '/api/events'])
+
+app.use((req, res, next) => {
+  // Skip preflight noise entirely; it's handled by the CORS middleware below.
+  if (req.method === 'OPTIONS') return next()
+  const start = Date.now()
+  // Capture the full path eagerly — sub-routers rewrite req.path before the
+  // finish handler fires, so reading it there would log '/sessions' instead
+  // of '/api/sessions'. req.originalUrl includes the query string which we
+  // don't want to log (it can contain the bearer token), so strip it.
+  const fullPath = (req.originalUrl ?? req.url).split('?')[0]
+  res.on('finish', () => {
+    const status = res.statusCode
+    if (QUIET_PATHS.has(fullPath!) && status < 400) return
+    const ms = Date.now() - start
+    const ts = new Date().toISOString().slice(11, 19)
+    console.log(`${ts} ${req.method.padEnd(6)} ${status} ${ms}ms ${fullPath}`)
+  })
   next()
 })
 

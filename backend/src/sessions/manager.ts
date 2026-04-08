@@ -133,15 +133,12 @@ export class SessionManager {
     const session = this.store.get(sessionId)
     if (session) this.emitSidebarUpdate(session)
 
-    // When a turn completes, reap the proc so the next turn lazily spawns with
-    // --resume. This keeps us within Max rate limits and avoids a long-lived
-    // CLI sitting idle per session.
+    // After a turn completes, drop our reference. The ClaudeCodeProc already
+    // closed its stdin (see claudeProc.send), so the CLI exits on its own
+    // with code 0 — no explicit kill needed. The next turn will lazily
+    // spawn a fresh proc with --resume.
     if (ev.kind === 'result') {
-      const proc = this.procs.get(sessionId)
-      if (proc) {
-        proc.kill()
-        this.procs.delete(sessionId)
-      }
+      this.procs.delete(sessionId)
     }
   }
 
