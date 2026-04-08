@@ -9,3 +9,6 @@ dist/
 *.tsbuildinfo
 frontend/vite.config.d.ts
 frontend/vite.config.js
+# Glasses simulator / HUD capture screenshots
+glasses_*.png
+frontend/glasses_*.png
