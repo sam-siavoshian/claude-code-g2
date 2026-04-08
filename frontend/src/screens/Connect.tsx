@@ -9,6 +9,32 @@ import { bootstrap, checkHealth, deleteSession } from '../api'
 const LS_URL = 'cc-g2.backendUrl'
 const LS_TOK = 'cc-g2.token'
 
+// Wrap storage in try/catch: sandboxed WebViews and some browser extensions
+// throw "Access to storage is not allowed from this context". We still want
+// the app to boot in that case — credentials just won't persist across reloads.
+async function safeGet(key: string): Promise<string> {
+  try {
+    return await storageGet<string>(key, '')
+  } catch (err) {
+    console.warn('[storage] read failed:', err)
+    return ''
+  }
+}
+async function safeSet(key: string, value: string): Promise<void> {
+  try {
+    await storageSet(key, value)
+  } catch (err) {
+    console.warn('[storage] write failed:', err)
+  }
+}
+async function safeRemove(key: string): Promise<void> {
+  try {
+    await storageRemove(key)
+  } catch (err) {
+    console.warn('[storage] remove failed:', err)
+  }
+}
+
 export function Connect() {
   const state = useAppState()
   const [urlInput, setUrlInput] = useState('')
@@ -25,15 +51,15 @@ export function Connect() {
       if (qsUrl && qsTok) {
         setUrlInput(qsUrl)
         setTokenInput(qsTok)
-        await Promise.all([storageSet(LS_URL, qsUrl), storageSet(LS_TOK, qsTok)])
+        await Promise.all([safeSet(LS_URL, qsUrl), safeSet(LS_TOK, qsTok)])
         store.setCredentials(qsUrl, qsTok)
         window.history.replaceState({}, '', window.location.pathname)
         await checkAndBoot(qsUrl, qsTok)
         return
       }
       const [savedUrl, savedTok] = await Promise.all([
-        storageGet<string>(LS_URL, ''),
-        storageGet<string>(LS_TOK, ''),
+        safeGet(LS_URL),
+        safeGet(LS_TOK),
       ])
       if (savedUrl) setUrlInput(savedUrl)
       if (savedTok) setTokenInput(savedTok)
@@ -62,7 +88,7 @@ export function Connect() {
     if (!url || !token) return
     setSaving(true)
     try {
-      await Promise.all([storageSet(LS_URL, url), storageSet(LS_TOK, token)])
+      await Promise.all([safeSet(LS_URL, url), safeSet(LS_TOK, token)])
       store.setCredentials(url, token)
       await checkAndBoot(url, token)
     } finally {
@@ -71,7 +97,7 @@ export function Connect() {
   }
 
   async function onLogout() {
-    await Promise.all([storageRemove(LS_URL), storageRemove(LS_TOK)])
+    await Promise.all([safeRemove(LS_URL), safeRemove(LS_TOK)])
     store.clearCredentials()
     setUrlInput('')
     setTokenInput('')
