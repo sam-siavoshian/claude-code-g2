@@ -17,6 +17,20 @@ export function Connect() {
 
   useEffect(() => {
     void (async () => {
+      // Query-string handoff: ./dev.sh puts ?backend=<tunnel>&token=<bearer>
+      // into the QR code so a single scan pre-fills both fields.
+      const params = new URLSearchParams(window.location.search)
+      const qsUrl = params.get('backend')
+      const qsTok = params.get('token')
+      if (qsUrl && qsTok) {
+        setUrlInput(qsUrl)
+        setTokenInput(qsTok)
+        await Promise.all([storageSet(LS_URL, qsUrl), storageSet(LS_TOK, qsTok)])
+        store.setCredentials(qsUrl, qsTok)
+        window.history.replaceState({}, '', window.location.pathname)
+        await checkAndBoot(qsUrl, qsTok)
+        return
+      }
       const [savedUrl, savedTok] = await Promise.all([
         storageGet<string>(LS_URL, ''),
         storageGet<string>(LS_TOK, ''),

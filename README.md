@@ -30,10 +30,13 @@ Press the temple, say what you want done, watch Claude stream the transcript ont
 
 ## Requirements
 
-- **macOS** with a Claude Max / Pro subscription logged in via `claude auth login`
-- **[Bun](https://bun.sh)** (`curl -fsSL https://bun.sh/install | bash`)
-- **[claude-code CLI](https://code.claude.com)** — `claude --version` should print 2.x
-- **[cloudflared](https://github.com/cloudflare/cloudflared)** — `brew install cloudflared`
+You only need these two to be installed manually — `./dev.sh` takes care of the rest (bun, cloudflared, qrencode).
+
+- **macOS** with a Claude Max / Pro subscription logged in via `claude auth login` ([install](https://code.claude.com))
+- **[Homebrew](https://brew.sh)** (used by the dev script to install tunnel + QR tools)
+
+And for the voice loop:
+
 - **OpenAI API key** for Whisper transcription (~$0.006 / minute)
 - **Even Realities G2 glasses** + the Even Realities App on your phone
 - Optional: [**evenhub-simulator**](https://www.npmjs.com/package/@evenrealities/evenhub-simulator) for desktop dry-runs
@@ -84,23 +87,43 @@ You say *"new session in arena"*, pick "arena" on the HUD, and Claude spawns `cw
 
 ---
 
-## Run (four terminals)
+## Run
+
+**One command does everything:**
 
 ```bash
-# 1. backend — prints BEARER TOKEN on first boot, copy it
-cd backend && bun run dev
-
-# 2. tunnel — public HTTPS endpoint the phone can reach
-cloudflared tunnel --url http://localhost:8787
-
-# 3. frontend — Vite dev server for the WebView
-cd frontend && bun run dev
-
-# 4. sideload QR into the Even Realities App
-cd frontend && bunx @evenrealities/evenhub-cli qr --url "http://<your-lan-ip>:5173"
+./dev.sh
 ```
 
-Scan the QR with the Even Realities App. On first launch, paste the Cloudflare URL and the bearer token into the companion pane. Green dot → connected. Put on the glasses.
+The script:
+1. Installs missing tools (`bun`, `cloudflared`, `qrencode`) via Homebrew / curl
+2. Runs `bun install` in `backend/` and `frontend/` if needed
+3. Frees ports 8787 and 5173, kills stale cloudflared processes
+4. Starts the backend, extracts the bearer token
+5. Opens a Cloudflare quick tunnel, extracts the public URL
+6. Starts the Vite dev server
+7. Verifies the tunnel end-to-end (health + auth + rejection)
+8. Prints a **QR code** with `?backend=<tunnel>&token=<bearer>` query params
+
+Scan the QR with the Even Realities App. The companion pane **auto-fills** both fields and connects — no copy-paste. Green dot → ready. Put on the glasses.
+
+`Ctrl-C` stops the backend, tunnel, and Vite together.
+
+### Manual run (if you want individual terminals)
+
+```bash
+# 1. backend
+cd backend && bun run dev
+
+# 2. tunnel
+cloudflared tunnel --url http://localhost:8787
+
+# 3. frontend
+cd frontend && bun run dev
+
+# 4. sideload into the Even Realities App
+cd frontend && bunx @evenrealities/evenhub-cli qr --url "http://<your-lan-ip>:5173"
+```
 
 ### Dry-run without hardware
 
