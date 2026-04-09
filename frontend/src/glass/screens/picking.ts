@@ -1,36 +1,37 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router'
 import { buildScrollableList } from 'even-toolkit/glass-display-builders'
 import { moveHighlight } from 'even-toolkit/glass-nav'
-import { glassHeader } from 'even-toolkit/types'
 import { truncate } from 'even-toolkit/text-utils'
 import type { AppSnapshot, AppActions } from '../shared'
+import { brandedHeader, footer, padTo, line } from '../theme'
 
-const CANCEL_LABEL = '× Cancel'
+const CANCEL_LABEL = '× cancel'
 
 function items(snapshot: AppSnapshot): string[] {
   return [...snapshot.projects, CANCEL_LABEL]
 }
 
-function headerText(snapshot: AppSnapshot): string {
-  const t = (snapshot.pendingTranscript ?? '').trim()
-  if (!t) return 'PICK PROJECT'
-  return truncate(t, 32)
-}
-
 export const pickingScreen: GlassScreen<AppSnapshot, AppActions> = {
   display(snapshot, nav) {
     const list = items(snapshot)
-    return {
-      lines: [
-        ...glassHeader(headerText(snapshot), 'Choose a project'),
-        ...buildScrollableList({
-          items: list,
-          highlightedIndex: Math.min(nav.highlightedIndex, list.length - 1),
-          maxVisible: 6,
-          formatter: (item) => item,
-        }),
-      ],
+    const lines = [...brandedHeader('* PICK PROJECT', `${snapshot.projects.length} dirs`)]
+
+    // Show what Whisper heard so the user can sanity-check before committing.
+    const heard = (snapshot.pendingTranscript ?? '').trim()
+    if (heard) {
+      lines.push(line(`> ${truncate(heard, 38)}`, 'meta'))
     }
+
+    lines.push(...buildScrollableList({
+      items: list,
+      highlightedIndex: Math.min(nav.highlightedIndex, list.length - 1),
+      maxVisible: 5,
+      formatter: (item) => item,
+    }))
+
+    const padded = padTo(lines, 9)
+    padded.push(footer('tap select · 2tap cancel'))
+    return { lines: padded }
   },
 
   action(action, nav, snapshot, ctx) {

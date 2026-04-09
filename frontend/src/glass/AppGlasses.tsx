@@ -66,47 +66,48 @@ export function AppGlasses() {
     return () => clearInterval(iv)
   }, [state.mode])
 
-  // Global SSE: one stream for sidebar-level events.
+  // Single global SSE stream. The backend's publishTranscript already fans
+  // every transcript event to subscribers of the '*' channel too, so one
+  // connection covers BOTH sidebar-level events (session_created/updated/
+  // deleted) AND per-session transcript events.
+  //
+  // This deliberately replaces the earlier per-session SseClient. The
+  // per-session subscription used to open *after* openSession() ran, which
+  // meant Claude's assistant_text could fire between the POST response and
+  // the EventSource handshake completing — and be lost forever since SSE
+  // has no replay. The global stream is open from the moment credentials
+  // land, long before any session is created, so nothing gets missed.
   useEffect(() => {
     if (!state.backendUrl || !state.token) return
     const client = new SseClient('*', (ev: SseEvent) => {
-      if (ev.kind !== 'global') return
-      const g = ev.event
-      if (g.kind === 'session_created') {
-        store.upsertSession({
-          id: g.sessionId,
-          title: g.title,
-          projectName: g.projectName,
-          createdAt: g.ts,
-          lastActiveAt: g.ts,
-        })
-      } else if (g.kind === 'session_updated') {
-        const existing = store.getState().sessions.find((s) => s.id === g.sessionId)
-        if (existing) {
+      if (ev.kind === 'global') {
+        const g = ev.event
+        if (g.kind === 'session_created') {
           store.upsertSession({
-            ...existing,
+            id: g.sessionId,
             title: g.title,
-            lastActiveAt: g.lastActiveAt,
+            projectName: g.projectName,
+            createdAt: g.ts,
+            lastActiveAt: g.ts,
           })
+        } else if (g.kind === 'session_updated') {
+          const existing = store.getState().sessions.find((s) => s.id === g.sessionId)
+          if (existing) {
+            store.upsertSession({
+              ...existing,
+              title: g.title,
+              lastActiveAt: g.lastActiveAt,
+            })
+          }
+        } else if (g.kind === 'session_deleted') {
+          store.deleteSession(g.sessionId)
         }
-      } else if (g.kind === 'session_deleted') {
-        store.deleteSession(g.sessionId)
+      } else if (ev.kind === 'transcript') {
+        store.pushTranscriptEvent(ev.sessionId, ev.event)
       }
     })
     return () => client.close()
   }, [state.backendUrl, state.token])
-
-  // Per-session SSE: opened only while viewing a specific session.
-  useEffect(() => {
-    const id = state.activeSessionId
-    if (!id || !state.backendUrl || !state.token) return
-    const client = new SseClient(id, (ev: SseEvent) => {
-      if (ev.kind === 'transcript' && ev.sessionId === id) {
-        store.pushTranscriptEvent(id, ev.event)
-      }
-    })
-    return () => client.close()
-  }, [state.activeSessionId, state.backendUrl, state.token])
 
   useEffect(() => {
     if (!state.backendUrl || !state.token) return

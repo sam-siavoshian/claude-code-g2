@@ -81,6 +81,15 @@ export function isRecordingMode(mode: AppMode): boolean {
   return RECORDING_MODES.has(mode)
 }
 
+function isSameEvent(a: TranscriptEvent, b: TranscriptEvent): boolean {
+  if (a.kind !== b.kind || a.ts !== b.ts) return false
+  if (a.kind === 'tool_use' && b.kind === 'tool_use') return a.toolUseId === b.toolUseId
+  if (a.kind === 'tool_result' && b.kind === 'tool_result') return a.toolUseId === b.toolUseId
+  if (a.kind === 'assistant_text' && b.kind === 'assistant_text') return a.text === b.text
+  if (a.kind === 'user' && b.kind === 'user') return a.text === b.text
+  return true
+}
+
 export const store = {
   getState(): AppState {
     return state
@@ -150,6 +159,11 @@ export const store = {
   },
   pushTranscriptEvent(sessionId: string, ev: TranscriptEvent): void {
     if (sessionId !== state.activeSessionId) return
+    // Cheap dedup: if the previous event has the same timestamp, kind and
+    // (where relevant) id, treat it as a duplicate. This lets us mix live
+    // SSE events with a defensive getSession fetch without risking repeats.
+    const last = state.activeTranscript[state.activeTranscript.length - 1]
+    if (last && isSameEvent(last, ev)) return
     set({
       activeTranscript: [...state.activeTranscript, ev],
       // Stick to the bottom on new events.
