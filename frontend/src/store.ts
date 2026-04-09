@@ -103,7 +103,7 @@ export const store = {
     set({
       backendUrl: backendUrl.replace(/\/$/, ''),
       token,
-      mode: 'sidebar',
+      mode: 'main',
       connection: 'unknown',
       connectionError: null,
     })
@@ -137,24 +137,24 @@ export const store = {
   deleteSession(id: string): void {
     set({ sessions: state.sessions.filter((s) => s.id !== id) })
     if (state.activeSessionId === id) {
-      set({ activeSessionId: null, activeTranscript: [], mode: 'sidebar' })
+      // Stay in 'main' (split view); just clear the active session.
+      set({ activeSessionId: null, activeTranscript: [] })
     }
   },
   openSession(id: string, transcript: TranscriptEvent[]): void {
     set({
       activeSessionId: id,
       activeTranscript: transcript,
-      mode: 'session',
-      navIndex: 0,
+      mode: 'main',
       sessionScrollOffset: 0,
     })
   },
   closeSession(): void {
+    // Stay in 'main' so the sidebar stays visible — just drop the active id.
     set({
       activeSessionId: null,
       activeTranscript: [],
-      mode: 'sidebar',
-      navIndex: 0,
+      mode: 'main',
     })
   },
   pushTranscriptEvent(sessionId: string, ev: TranscriptEvent): void {

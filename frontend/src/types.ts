@@ -41,11 +41,10 @@ export type SseEvent =
 
 export type AppMode =
   | 'unconfigured'
-  | 'sidebar'
-  | 'recording-new'
-  | 'transcribing'
-  | 'picking-project'
-  | 'session'
-  | 'recording-turn'
+  | 'main'              // split view: sidebar (left) + active chat (right)
+  | 'recording-new'     // full-screen overlay
+  | 'transcribing'      // full-screen overlay
+  | 'picking-project'   // full-screen project picker
+  | 'recording-turn'    // full-screen overlay
 
 export type ConnectionStatus = 'unknown' | 'ok' | 'error'

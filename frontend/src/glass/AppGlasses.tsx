@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import { useGlasses } from 'even-toolkit/useGlasses'
 import { appSplash } from './splash'
 import { toDisplayData, onGlassAction } from './selectors'
+import { toSplitView } from './splitView'
 import type { AppSnapshot, AppActions } from './shared'
 import { isRecordingMode, store, useAppState } from '../store'
 import {
@@ -16,30 +17,30 @@ import {
 import type { AppMode, SseEvent } from '../types'
 import { startCapture, stopCapture } from '../audio'
 
-// The active session's presence determines where a cancel/finish lands.
+// All recording flows return to the unified split view ('main') — the
+// sidebar is always present in that view, so there's no separate "go back
+// to the sidebar" mode anymore.
 function fallbackModeAfterRecording(): AppMode {
-  return store.getState().activeSessionId ? 'session' : 'sidebar'
+  return 'main'
 }
 
 // Map each AppMode to a distinct pathname. useGlasses only re-evaluates the
 // active screen when `location.pathname` changes, so we drive the "current
 // screen" by navigating whenever the store mode changes.
 const MODE_PATHS: Record<AppMode, string> = {
-  unconfigured: '/g/sidebar',
-  sidebar: '/g/sidebar',
+  unconfigured: '/g/main',
+  main: '/g/main',
   'recording-new': '/g/recording-new',
   transcribing: '/g/transcribing',
   'picking-project': '/g/picking',
-  session: '/g/session',
   'recording-turn': '/g/recording-turn',
 }
 
 function pathToScreen(pathname: string): string {
-  // Reverse the MODE_PATHS map to recover the screen name.
   for (const [mode, path] of Object.entries(MODE_PATHS)) {
     if (path === pathname) return mode
   }
-  return 'sidebar'
+  return 'main'
 }
 
 export function AppGlasses() {
@@ -177,7 +178,7 @@ export function AppGlasses() {
       try {
         const text = await finishRecordingToText()
         if (text == null) {
-          store.enterMode('sidebar')
+          store.enterMode('main')
           return
         }
         store.setPendingTranscript(text)
@@ -185,33 +186,33 @@ export function AppGlasses() {
       } catch (err) {
         console.error('[glass] transcribe failed:', err)
         store.setError('Transcription failed')
-        store.enterMode('sidebar')
+        store.enterMode('main')
       }
     },
     async stopTurnRecordingAndSend() {
       const sid = store.getState().activeSessionId
       if (!sid) {
-        store.enterMode('sidebar')
+        store.enterMode('main')
         return
       }
       try {
         const text = await finishRecordingToText()
         if (text == null) {
-          store.enterMode('session')
+          store.enterMode('main')
           return
         }
         await sendTurn(sid, text)
-        store.enterMode('session')
+        store.enterMode('main')
       } catch (err) {
         console.error('[glass] follow-up turn failed:', err)
         store.setError('Turn failed')
-        store.enterMode('session')
+        store.enterMode('main')
       }
     },
     async pickProject(projectName: string) {
       const prompt = store.getState().pendingTranscript
       if (!prompt) {
-        store.enterMode('sidebar')
+        store.enterMode('main')
         return
       }
       try {
@@ -224,7 +225,7 @@ export function AppGlasses() {
       } catch (err) {
         console.error('[glass] createSession failed:', err)
         store.setError('Create session failed')
-        store.enterMode('sidebar')
+        store.enterMode('main')
       }
     },
     async openSessionById(id: string) {
@@ -263,11 +264,15 @@ export function AppGlasses() {
   useGlasses({
     getSnapshot,
     toDisplayData,
+    toSplit: toSplitView,
     onGlassAction: handleGlassAction,
     deriveScreen,
     appName: 'CLAUDE CODE G2',
     splash: appSplash,
-    getPageMode: () => 'text',
+    // 'main' renders as a split layout (sidebar + chat). The recording /
+    // transcribing / picking screens take over the full screen in text mode
+    // for maximum focus.
+    getPageMode: (screen) => (screen === 'main' ? 'split' : 'text'),
   })
 
   return null
