@@ -76,6 +76,30 @@ export async function getConfig(): Promise<BackendConfig> {
   return res.json()
 }
 
+export type PermissionMode = 'bypassPermissions' | 'acceptEdits' | 'default'
+
+export interface Settings {
+  permissionMode: PermissionMode
+  model: string
+  defaultProjectName: string
+  projects: { name: string }[]
+}
+
+export async function getSettings(): Promise<Settings> {
+  const res = await authFetch('/api/settings')
+  if (!res.ok) throw new Error(`getSettings: ${res.status}`)
+  return res.json()
+}
+
+export async function saveSettings(update: Partial<Settings>): Promise<Settings> {
+  const res = await authFetch('/api/settings', {
+    method: 'POST',
+    body: JSON.stringify(update),
+  })
+  if (!res.ok) throw new Error(`saveSettings: ${res.status}`)
+  return res.json()
+}
+
 export async function listSessions(): Promise<SessionSummary[]> {
   const res = await authFetch('/api/sessions')
   if (!res.ok) throw new Error(`listSessions: ${res.status}`)

@@ -13,11 +13,10 @@ export interface CreateSessionOpts {
 export class SessionManager {
   private store: SessionStore
   private procs = new Map<string, ClaudeCodeProc>()
+  private cfg: RuntimeConfig
 
-  constructor(
-    private cfg: RuntimeConfig,
-    private sse: SseHub,
-  ) {
+  constructor(cfg: RuntimeConfig, private sse: SseHub) {
+    this.cfg = cfg
     this.store = new SessionStore(cfg.sessionsPath)
   }
 
@@ -112,12 +111,16 @@ export class SessionManager {
   ): ClaudeCodeProc {
     let proc = this.procs.get(session.id)
     if (proc) return proc
+    // Settings (model + permissionMode) are read from the live config on
+    // every spawn, so changes via /api/settings take effect on the next
+    // turn without restarting the backend.
     proc = new ClaudeCodeProc(
       {
         sessionId: session.id,
         cwd: session.cwd,
         claudeBinary: this.cfg.claudeBinary,
-        model: opts.model,
+        model: opts.model ?? this.cfg.model,
+        permissionMode: this.cfg.permissionMode,
         resume: opts.resume,
       },
       (ev) => this.handleProcEvent(session.id, ev),
@@ -125,6 +128,13 @@ export class SessionManager {
     this.procs.set(session.id, proc)
     proc.start()
     return proc
+  }
+
+  // Hot-reload the live config — called by the /api/settings endpoint after
+  // a save. Existing in-flight CLIs are unaffected; the next ensureProc()
+  // will pick up the new values.
+  applyConfig(cfg: typeof this.cfg): void {
+    this.cfg = cfg
   }
 
   private handleProcEvent(sessionId: string, ev: TranscriptEvent): void {

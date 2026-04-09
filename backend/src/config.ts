@@ -8,11 +8,16 @@ export interface ProjectEntry {
   path: string
 }
 
+export type PermissionMode = 'bypassPermissions' | 'acceptEdits' | 'default'
+export type ModelName = 'sonnet' | 'opus' | 'haiku' | string
+
 export interface ConfigFile {
   token: string
   projects: ProjectEntry[]
   defaultProjectName: string
   claudeBinary: string
+  permissionMode: PermissionMode
+  model: ModelName
   openaiApiKey?: string
 }
 
@@ -21,6 +26,12 @@ export interface RuntimeConfig extends ConfigFile {
   configDir: string
   sessionsPath: string
 }
+
+export const VALID_PERMISSION_MODES: ReadonlySet<PermissionMode> = new Set([
+  'bypassPermissions',
+  'acceptEdits',
+  'default',
+])
 
 const CONFIG_DIR = path.join(os.homedir(), '.cc-g2')
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json')
@@ -46,6 +57,12 @@ function defaultConfig(): ConfigFile {
     ],
     defaultProjectName: 'g2',
     claudeBinary: 'claude',
+    // Skip permission prompts entirely so voice flows never get stuck waiting
+    // for an approval the user can't see. Equivalent to passing
+    // --dangerously-skip-permissions / --permission-mode bypassPermissions
+    // to the claude CLI.
+    permissionMode: 'bypassPermissions',
+    model: 'sonnet',
   }
 }
 
@@ -71,6 +88,21 @@ export function loadConfig(): RuntimeConfig {
   // Ensure a token exists (even on an existing file that pre-dates this field)
   if (!cfg.token || cfg.token.length < 16) {
     cfg.token = crypto.randomBytes(32).toString('base64url')
+    created = true
+  }
+  // Migrate older configs that pre-date the settings fields. Default to the
+  // most permissive / smartest combination so existing users don't have to
+  // touch anything.
+  if (!cfg.permissionMode || !VALID_PERMISSION_MODES.has(cfg.permissionMode)) {
+    cfg.permissionMode = 'bypassPermissions'
+    created = true
+  }
+  if (!cfg.model || typeof cfg.model !== 'string') {
+    cfg.model = 'sonnet'
+    created = true
+  }
+  if (!cfg.claudeBinary) {
+    cfg.claudeBinary = 'claude'
     created = true
   }
 
@@ -129,4 +161,40 @@ export function loadConfig(): RuntimeConfig {
     configDir: CONFIG_DIR,
     sessionsPath: SESSIONS_PATH,
   }
+}
+
+// Persist a partial settings update back to ~/.cc-g2/config.json. Only the
+// fields the UI is allowed to touch are accepted; the token, projects, and
+// claudeBinary are not exposed via the HTTP settings endpoint.
+export interface SettingsUpdate {
+  permissionMode?: PermissionMode
+  model?: ModelName
+  defaultProjectName?: string
+}
+
+export function saveSettings(cfg: RuntimeConfig, update: SettingsUpdate): RuntimeConfig {
+  const next: RuntimeConfig = { ...cfg }
+  if (update.permissionMode && VALID_PERMISSION_MODES.has(update.permissionMode)) {
+    next.permissionMode = update.permissionMode
+  }
+  if (typeof update.model === 'string' && update.model.length > 0) {
+    next.model = update.model
+  }
+  if (
+    typeof update.defaultProjectName === 'string' &&
+    cfg.projects.some((p) => p.name === update.defaultProjectName)
+  ) {
+    next.defaultProjectName = update.defaultProjectName
+  }
+  // Re-write only the on-disk fields, preserving the secret token.
+  const onDisk: ConfigFile = {
+    token: next.token,
+    projects: next.projects,
+    defaultProjectName: next.defaultProjectName,
+    claudeBinary: next.claudeBinary,
+    permissionMode: next.permissionMode,
+    model: next.model,
+  }
+  fs.writeFileSync(next.configPath, JSON.stringify(onDisk, null, 2), { mode: 0o600 })
+  return next
 }

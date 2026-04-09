@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import express, { type Request, type Response, type NextFunction } from 'express'
-import { loadConfig } from './config.ts'
+import { loadConfig, saveSettings, type SettingsUpdate } from './config.ts'
 import { bearerAuth, checkToken, extractToken } from './auth.ts'
 import { SseHub } from './events.ts'
 import { SessionManager } from './sessions/manager.ts'
@@ -11,7 +11,9 @@ import { transcribeHandler } from './transcribe.ts'
 // Entry point. Wires config → manager → SSE hub → HTTP routes.
 // -----------------------------------------------------------------------------
 
-const cfg = loadConfig()
+// `cfg` is mutable so /api/settings can hot-reload after a save without
+// restarting the backend.
+let cfg = loadConfig()
 const sse = new SseHub()
 const manager = new SessionManager(cfg, sse)
 
@@ -84,6 +86,33 @@ authed.get('/config', (_req, res) => {
     projects: cfg.projects.map((p) => ({ name: p.name })),
     defaultProjectName: cfg.defaultProjectName,
   })
+})
+
+// -------- settings (read + write) --------------------------------------------
+authed.get('/settings', (_req, res) => {
+  res.json({
+    permissionMode: cfg.permissionMode,
+    model: cfg.model,
+    defaultProjectName: cfg.defaultProjectName,
+    projects: cfg.projects.map((p) => ({ name: p.name })),
+  })
+})
+
+authed.post('/settings', (req, res) => {
+  const body = req.body as SettingsUpdate
+  try {
+    cfg = saveSettings(cfg, body)
+    manager.applyConfig(cfg)
+    res.json({
+      ok: true,
+      permissionMode: cfg.permissionMode,
+      model: cfg.model,
+      defaultProjectName: cfg.defaultProjectName,
+    })
+  } catch (err) {
+    console.error('[settings] save failed:', err)
+    res.status(400).json({ error: (err as Error).message })
+  }
 })
 
 authed.get('/sessions', (_req, res) => {

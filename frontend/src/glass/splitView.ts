@@ -1,40 +1,49 @@
 import type { SplitData, GlassNavState } from 'even-toolkit/types'
-import { truncate } from 'even-toolkit/text-utils'
 import type { AppSnapshot } from './shared'
 import type { TranscriptEvent } from '../types'
+
+// truncate() in even-toolkit/text-utils appends '~' which looks like part of
+// the word in a proportional font. Roll our own with a real ellipsis.
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  if (maxLen <= 1) return text.slice(0, maxLen)
+  return text.slice(0, maxLen - 1) + '…'
+}
 
 // -----------------------------------------------------------------------------
 // Split-view renderer for the 'main' screen.
 //
+// IMPORTANT: the G2 LVGL font is PROPORTIONAL, so we can't right-align with
+// spaces or pad columns to fixed widths. Every alignment trick that worked on
+// my fixed-width unit tests came out broken on real hardware. This file
+// deliberately uses no padding tricks — just one short line of text per row,
+// with markers that read clearly in a proportional font.
+//
 // Layout (576x288):
 //
-//   ┌─────────────────────────────────────────────────────────────────┐  40px header
-//   │  * CLAUDE CODE        <session title>           ◐ thinking      │
-//   ├──────────┬──────────────────────────────────────────────────────┤
-//   │ ▶ sess1  │ > make a hello.txt file                              │  248px panes
-//   │ ● sess2  │ I'll create it for you.                              │
-//   │   sess3  │ >> Write(hello.txt)                                  │
-//   │   sess4  │ Done — hello.txt created.                            │
-//   │ ─────    │                                                       │
-//   │ + new    │ > tap to talk                                        │
-//   └──────────┴──────────────────────────────────────────────────────┘
-//      180px                          396px
+//   ┌─────────┬───────────────────────────────────────┐  40px header
+//   │ * CLAUDE                <session title> · ready │
+//   ├─────────┼───────────────────────────────────────┤
+//   │ > sess  │ > make a hello.txt file               │
+//   │   sess  │ I'll do that.                         │  248px
+//   │ * sess  │ >> Write(hello.txt)                   │  panes
+//   │   sess  │ done.                                 │
+//   │         │                                       │
+//   │ [+] new │ > tap to talk                         │
+//   └─────────┴───────────────────────────────────────┘
+//      180px                  396px
 //
-// The toolkit clamps leftWidth to [180, 396]. We pin it at 180 (the
-// narrowest possible) so the chat pane gets the most room.
+// Markers:
+//   "> "    cursor on this row (highlighted by user)
+//   "* "    this row is the currently active session
+//   "  "    nothing
+//   "[+]"   the new-session button (last row)
 // -----------------------------------------------------------------------------
 
 const SIDEBAR_W = 180
 const HEADER_H = 40
-
-// Char-per-row estimates for the proportional G2 font. Conservative.
-const SIDEBAR_COLS = 13
+const SIDEBAR_LABEL_LEN = 11
 const RIGHT_COLS = 28
-
-// Visible row counts for each pane (panes are 248px tall after the 40px header).
-const SIDEBAR_ROWS = 13
-const RIGHT_ROWS = 13
-const HEADER_ROWS = 2
 
 export interface SidebarItem {
   kind: 'session' | 'new'
@@ -50,7 +59,7 @@ export function buildSidebarItems(snapshot: AppSnapshot): SidebarItem[] {
     label: s.title,
     isActive: s.id === snapshot.activeSessionId,
   }))
-  items.push({ kind: 'new', label: '+ new' })
+  items.push({ kind: 'new', label: 'new' })
   return items
 }
 
@@ -98,14 +107,14 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
           const cmd = inp.command
           const pat = inp.pattern
           if (typeof fp === 'string') suffix = '(' + (fp.split('/').pop() ?? fp) + ')'
-          else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 16) + ')'
-          else if (typeof pat === 'string') suffix = '(' + truncate(pat, 16) + ')'
+          else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 14) + ')'
+          else if (typeof pat === 'string') suffix = '(' + truncate(pat, 14) + ')'
         }
         out.push(`>> ${ev.name}${suffix}`)
         break
       }
       case 'tool_result':
-        if (ev.isError) out.push(...wrapText('! ' + (ev.content || 'tool error'), RIGHT_COLS))
+        if (ev.isError) out.push(...wrapText('! ' + (ev.content || 'error'), RIGHT_COLS))
         break
       case 'result':
         if (ev.isError) out.push('! turn failed')
@@ -119,24 +128,23 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
 }
 
 function buildHeader(snapshot: AppSnapshot): string {
-  const brand = '* CLAUDE'
-  const status = snapshot.activeBusy ? '◐ thinking' : (snapshot.activeSessionId ? '○ ready' : '* ready')
+  // Two short lines. No right-alignment, no padding.
+  // Line 1: brand. Line 2: active session title or "ready".
+  const brand = '* CLAUDE CODE'
+  const status = snapshot.activeBusy ? 'thinking...' : 'ready'
   const active = snapshot.sessions.find((s) => s.id === snapshot.activeSessionId)
-  const title = active ? truncate(active.title, 28) : ''
-
-  // Two-line header. First line: brand + status. Second line: active title.
-  const padCount = Math.max(1, 40 - brand.length - status.length)
-  const line1 = brand + ' '.repeat(padCount) + status
-  const line2 = title || (snapshot.connection === 'ok' ? 'pick a session ▶' : 'connecting...')
-  return line1 + '\n' + line2
+  if (active) {
+    return `${brand}\n${truncate(active.title, 26)} · ${status}`
+  }
+  return `${brand}\n${status}`
 }
 
 function buildLeftPane(items: SidebarItem[], highlightedIndex: number): string {
-  // Sliding window centered on the highlighted item.
-  const visibleSlots = SIDEBAR_ROWS - 1 // reserve 1 row for the "+" line at the bottom
   const sessionItems = items.filter((i) => i.kind === 'session')
-  const newItem = items.find((i) => i.kind === 'new')
 
+  // Sliding window centered on the highlighted item, capped at 8 visible.
+  const VISIBLE = 8
+  const visibleSlots = Math.min(VISIBLE, sessionItems.length)
   const start = Math.max(
     0,
     Math.min(
@@ -150,48 +158,42 @@ function buildLeftPane(items: SidebarItem[], highlightedIndex: number): string {
   for (let i = 0; i < slice.length; i++) {
     const idx = start + i
     const item = slice[i]!
-    const marker = idx === highlightedIndex ? '▶' : (item.isActive ? '●' : ' ')
-    rows.push(`${marker} ${truncate(item.label, SIDEBAR_COLS - 2)}`)
+    const isHighlighted = idx === highlightedIndex
+    const isActive = !!item.isActive
+    // Two-char marker that reads clearly in a proportional font:
+    //   "> " cursor here
+    //   "* " active session
+    //   "  " neither
+    //   ">*" cursor on the active session
+    let marker = '  '
+    if (isHighlighted && isActive) marker = '>*'
+    else if (isHighlighted) marker = '> '
+    else if (isActive) marker = '* '
+    rows.push(`${marker}${truncate(item.label, SIDEBAR_LABEL_LEN)}`)
   }
-  // Pad sidebar to fixed height so the "+" row always lands at the bottom.
-  while (rows.length < visibleSlots) rows.push('')
 
-  // Final "+" row, possibly highlighted.
+  // The new-session button. Brackets make it unmistakable as a button.
+  // Empty line above it for breathing room.
+  rows.push('')
   const newIdx = sessionItems.length
-  const newMarker = newIdx === highlightedIndex ? '▶' : ' '
-  const newLabel = newItem?.label ?? '+ new'
-  rows.push(`${newMarker} ${newLabel}`)
+  const newRow = newIdx === highlightedIndex ? '>[+] new' : ' [+] new'
+  rows.push(newRow)
 
   return rows.join('\n')
 }
 
 function buildRightPane(snapshot: AppSnapshot): string {
   if (!snapshot.activeSessionId) {
-    // No active session — show a friendly placeholder pointing at the sidebar.
-    return [
-      '',
-      '  * CLAUDE CODE G2',
-      '',
-      '  voice-driven coding',
-      '  on your AR glasses',
-      '',
-      '  pick a session ◀',
-      '  or tap + to start',
-    ].join('\n')
+    // Minimal empty state. No marketing copy.
+    return '* CLAUDE CODE\n\ntap [+] in the\nsidebar to start.'
   }
 
   const allLines = transcriptToLines(snapshot.transcript)
-  // Reserve 2 rows for the bottom prompt + spacer.
-  const visibleSlots = RIGHT_ROWS - 2
-  const totalLines = allLines.length
-  const offset = Math.min(snapshot.sessionScrollOffset, Math.max(0, totalLines - visibleSlots))
-  const sliceStart = Math.max(0, totalLines - visibleSlots - offset)
-  const visible = allLines.slice(sliceStart, sliceStart + visibleSlots)
-
-  // Pad transcript to fixed height so the prompt is always at the bottom.
-  while (visible.length < visibleSlots) visible.unshift('')
-
-  const promptLine = snapshot.activeBusy ? '◐ working...' : '> tap to talk'
+  // Show the most recent ~10 lines without padding (let LVGL handle vertical
+  // alignment in the proportional font).
+  const VISIBLE = 10
+  const visible = allLines.slice(Math.max(0, allLines.length - VISIBLE))
+  const promptLine = snapshot.activeBusy ? '... thinking' : '> tap to talk'
   return visible.join('\n') + '\n\n' + promptLine
 }
 
@@ -209,9 +211,6 @@ export function toSplitView(snapshot: AppSnapshot, nav: GlassNavState): SplitDat
   }
 }
 
-// Used by the action handler to bound the highlight.
 export function sidebarItemCount(snapshot: AppSnapshot): number {
   return buildSidebarItems(snapshot).length
 }
-// Wait — note: HEADER_ROWS is currently unused but kept for future symmetry.
-void HEADER_ROWS

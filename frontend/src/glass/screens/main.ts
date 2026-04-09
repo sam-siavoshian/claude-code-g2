@@ -1,20 +1,35 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router'
-import { line } from 'even-toolkit/types'
+import { line, separator } from 'even-toolkit/types'
 import { moveHighlight } from 'even-toolkit/glass-nav'
 import type { AppSnapshot, AppActions } from '../shared'
 import { buildSidebarItems } from '../splitView'
 
 // The 'main' screen is rendered in split mode (toSplit) by useGlasses, so
-// display() never actually fires for it. We still need to satisfy the screen
-// router interface — it returns a stub.
+// display() does not normally fire — but we still need a real fallback for
+// when split mode hasn't initialized yet (e.g. during the first paint after
+// the splash, or on a host that doesn't support split layouts).
 //
 // All gesture handling for the split layout lives here. The toolkit puts an
 // invisible isEventCapture=1 overlay container on top of the split layout,
 // which forwards every gesture to this action handler.
 
 export const mainScreen: GlassScreen<AppSnapshot, AppActions> = {
-  display() {
-    return { lines: [line('split mode (rendered via toSplit)')] }
+  display(snapshot) {
+    // Fallback rendering for environments where split mode isn't available.
+    // Shows the same minimal Claude Code launch screen so the user always
+    // sees something usable instead of an internal-looking debug string.
+    const count = snapshot.sessions.length
+    return {
+      lines: [
+        line('* CLAUDE CODE', 'meta'),
+        separator(),
+        line(''),
+        line(count === 0 ? '  no sessions yet' : `  ${count} session${count === 1 ? '' : 's'}`),
+        line(''),
+        line('  tap to start', 'meta'),
+        line('  swipe to scroll', 'meta'),
+      ],
+    }
   },
 
   action(action, nav, snapshot, ctx) {

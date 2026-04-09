@@ -27,6 +27,11 @@ function fallbackModeAfterRecording(): AppMode {
 // Map each AppMode to a distinct pathname. useGlasses only re-evaluates the
 // active screen when `location.pathname` changes, so we drive the "current
 // screen" by navigating whenever the store mode changes.
+//
+// 'unconfigured' is a transient init state, NOT a real screen. We deliberately
+// keep it out of the path-to-screen reverse lookup so /g/main always resolves
+// to the 'main' screen (and never to 'unconfigured', which would route to a
+// nonexistent screen and fall back to the stub display).
 const MODE_PATHS: Record<AppMode, string> = {
   unconfigured: '/g/main',
   main: '/g/main',
@@ -36,11 +41,16 @@ const MODE_PATHS: Record<AppMode, string> = {
   'recording-turn': '/g/recording-turn',
 }
 
+const PATH_TO_SCREEN: Record<string, string> = {
+  '/g/main': 'main',
+  '/g/recording-new': 'recording-new',
+  '/g/transcribing': 'transcribing',
+  '/g/picking': 'picking-project',
+  '/g/recording-turn': 'recording-turn',
+}
+
 function pathToScreen(pathname: string): string {
-  for (const [mode, path] of Object.entries(MODE_PATHS)) {
-    if (path === pathname) return mode
-  }
-  return 'main'
+  return PATH_TO_SCREEN[pathname] ?? 'main'
 }
 
 export function AppGlasses() {

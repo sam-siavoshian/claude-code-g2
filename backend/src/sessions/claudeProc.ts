@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as readline from 'node:readline'
 import type { TranscriptEvent } from './store.ts'
+import type { PermissionMode } from '../config.ts'
 
 // Wraps `claude -p --input-format stream-json --output-format stream-json`.
 // We use the CLI (not @anthropic-ai/claude-agent-sdk) because the SDK
@@ -42,6 +43,7 @@ export interface SpawnOptions {
   cwd: string
   claudeBinary: string
   model?: string // 'sonnet' | 'opus' | full id; defaults to sonnet
+  permissionMode?: PermissionMode
   resume?: boolean
 }
 
@@ -54,6 +56,7 @@ export class ClaudeCodeProc {
   private cwd: string
   private claudeBinary: string
   private model: string
+  private permissionMode: PermissionMode
   private onEvent: ProcEventHandler
   private resume: boolean
   // If the current run already emitted a `result` event, the subsequent
@@ -65,12 +68,21 @@ export class ClaudeCodeProc {
     this.cwd = opts.cwd
     this.claudeBinary = opts.claudeBinary
     this.model = opts.model ?? 'sonnet'
+    this.permissionMode = opts.permissionMode ?? 'bypassPermissions'
     this.resume = opts.resume ?? false
     this.onEvent = onEvent
   }
 
   start(): void {
     if (this.child) return
+    // bypassPermissions has its own dedicated flag in the CLI; the other two
+    // modes are passed via --permission-mode. The dedicated flag is what the
+    // user literally asked for: `claude --dangerously-skip-permissions`.
+    const permissionArgs =
+      this.permissionMode === 'bypassPermissions'
+        ? ['--dangerously-skip-permissions']
+        : ['--permission-mode', this.permissionMode]
+
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -78,7 +90,7 @@ export class ClaudeCodeProc {
       '--verbose',
       '--model', this.model,
       '--add-dir', this.cwd,
-      '--permission-mode', 'acceptEdits',
+      ...permissionArgs,
       '--allowedTools', DEFAULT_ALLOWED_TOOLS.join(' '),
       '--append-system-prompt', HUD_SYSTEM_PROMPT,
       '--max-turns', '30',
@@ -98,7 +110,7 @@ export class ClaudeCodeProc {
     this.rl = readline.createInterface({ input: this.child.stdout })
     this.rl.on('line', (line) => this.handleLine(line))
 
-    console.log(`[claude:${this.tag()}] start model=${this.model} resume=${this.resume} cwd=${this.cwd}`)
+    console.log(`[claude:${this.tag()}] start model=${this.model} perm=${this.permissionMode} resume=${this.resume} cwd=${this.cwd}`)
 
     this.child.stderr.on('data', (chunk) => {
       // The CLI sometimes prints warnings / update hints on stderr. Log but
