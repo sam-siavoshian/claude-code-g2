@@ -50,8 +50,18 @@ interface DiagnoseResult {
   timeMs: number
 }
 
+function describeFetchError(err: unknown): string {
+  if (err instanceof Error) {
+    const name = err.name && err.name !== 'Error' ? `${err.name}: ` : ''
+    return `${name}${err.message || String(err)}`
+  }
+  return String(err)
+}
+
 async function runDiagnose(backendUrl: string): Promise<DiagnoseResult> {
-  const target = backendUrl.replace(/\/$/, '') + '/api/health'
+  // /api/ping returns plain-text "pong". Simpler than /api/health and avoids
+  // any JSON-parsing quirks in embedded WebViews.
+  const target = backendUrl.replace(/\/$/, '') + '/api/ping'
   const start = Date.now()
   try {
     const res = await fetch(target, { method: 'GET' })
@@ -67,7 +77,7 @@ async function runDiagnose(backendUrl: string): Promise<DiagnoseResult> {
     return {
       url: target,
       ok: false,
-      error: (err as Error).message || String(err),
+      error: describeFetchError(err),
       timeMs: Date.now() - start,
     }
   }
@@ -117,9 +127,17 @@ export function Connect() {
     const result = await checkHealth(url, token)
     if (result.ok) {
       store.setConnection('ok')
+      setDiagnose(null)
       await bootstrap()
     } else {
-      store.setConnection('error', result.reason ?? 'health check failed')
+      const reason = result.failedUrl
+        ? `${result.reason} (url: ${result.failedUrl})`
+        : (result.reason ?? 'health check failed')
+      store.setConnection('error', reason)
+      // Auto-run a diagnostic so the failure card shows the raw fetch
+      // result without the user having to tap a button.
+      const diag = await runDiagnose(url)
+      setDiagnose(diag)
     }
   }
 

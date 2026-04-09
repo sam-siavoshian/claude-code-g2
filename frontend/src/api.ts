@@ -32,31 +32,41 @@ async function authFetch(path: string, init: RequestInit = {}): Promise<Response
 export interface HealthResult {
   ok: boolean
   reason?: string
+  failedUrl?: string
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    const name = err.name && err.name !== 'Error' ? `${err.name}: ` : ''
+    return `${name}${err.message || String(err)}`
+  }
+  return String(err)
 }
 
 export async function checkHealth(backendUrl: string, token: string): Promise<HealthResult> {
   const base = backendUrl.replace(/\/$/, '')
   // 1) Reachability check: /api/health is unauthed, so no CORS preflight.
-  //    If this fails, the URL is wrong or the backend isn't reachable.
+  const healthUrl = base + '/api/health'
   try {
-    const res = await fetch(base + '/api/health', { method: 'GET' })
-    if (!res.ok) return { ok: false, reason: `health HTTP ${res.status}` }
+    const res = await fetch(healthUrl, { method: 'GET' })
+    if (!res.ok) return { ok: false, reason: `health HTTP ${res.status}`, failedUrl: healthUrl }
   } catch (err) {
-    return { ok: false, reason: `can't reach backend: ${(err as Error).message}` }
+    return { ok: false, reason: `can't reach backend: ${describeError(err)}`, failedUrl: healthUrl }
   }
   // 2) Auth check: /api/config needs the bearer token. This triggers a CORS
   //    preflight; if the token is wrong we'll see 401, if CORS is broken
   //    we'll see a network error.
+  const cfgUrl = base + '/api/config'
   try {
-    const res = await fetch(base + '/api/config', {
+    const res = await fetch(cfgUrl, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     })
-    if (res.status === 401) return { ok: false, reason: 'wrong bearer token (401)' }
-    if (!res.ok) return { ok: false, reason: `config HTTP ${res.status}` }
+    if (res.status === 401) return { ok: false, reason: 'wrong bearer token (401)', failedUrl: cfgUrl }
+    if (!res.ok) return { ok: false, reason: `config HTTP ${res.status}`, failedUrl: cfgUrl }
     return { ok: true }
   } catch (err) {
-    return { ok: false, reason: `auth request blocked: ${(err as Error).message}` }
+    return { ok: false, reason: `auth request blocked: ${describeError(err)}`, failedUrl: cfgUrl }
   }
 }
 

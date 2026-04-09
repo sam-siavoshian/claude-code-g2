@@ -171,6 +171,16 @@ start_frontend() {
   wait_for_log "$FRONTEND_LOG" "Local:" "vite" 120
 }
 
+# Probe whether the backend is reachable directly over the LAN at the given
+# IP. The phone can use this when it's on the same network as the Mac (e.g.
+# tethered via iPhone hotspot — no DNS, no tunnel, no cellular round-trip).
+test_lan() {
+  local ip=$1
+  local code
+  code=$(curl -sS --max-time 3 -o /dev/null -w "%{http_code}" "http://$ip:$BACKEND_PORT/api/health" 2>/dev/null || echo "000")
+  [[ "$code" == "200" ]]
+}
+
 # --- verification ----------------------------------------------------------
 
 # Resolve a host via public DNS (1.1.1.1 first, 8.8.8.8 fallback). Cached
@@ -286,32 +296,67 @@ TUNNEL_URL=$(extract_tunnel_url)
 start_frontend
 LAN_IP=$(lan_ip)
 
-# URL-encode the backend URL because some QR scanners / URL parsers get
-# confused by the literal "https://" inside a query string value. The token
-# is base64url and needs no encoding.
-if need python3; then
-  ENC_BACKEND=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$TUNNEL_URL")
-else
-  # Bun ships with everything — fall back to it.
-  ENC_BACKEND=$(bun -e "console.log(encodeURIComponent(process.argv[2]))" x "$TUNNEL_URL")
-fi
-SETUP_URL="http://$LAN_IP:$FRONTEND_PORT/?backend=$ENC_BACKEND&token=$TOKEN"
+# Build setup URLs. We print TWO:
+#
+#   1. LAN (primary) — http://<lan-ip>:8787 as the backend.
+#      Used when the phone is on the same network as the Mac (most common:
+#      iPhone Personal Hotspot with the Mac as a client). No DNS, no
+#      cloudflare, no propagation lag — and the phone can already reach
+#      this IP since it's how vite was loaded in the first place.
+#
+#   2. Cloudflare tunnel (fallback) — for when the phone is NOT on the
+#      same network as the Mac (genuinely remote testing). May take 30s+
+#      for fresh trycloudflare.com subdomains to propagate to mobile
+#      cellular DNS resolvers.
+#
+# Both URLs use the same bearer token so a session created via one is
+# visible via the other.
+
+LAN_BACKEND="http://$LAN_IP:$BACKEND_PORT"
+url_encode() {
+  if need python3; then
+    python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+  else
+    bun -e "console.log(encodeURIComponent(process.argv[2]))" x "$1"
+  fi
+}
+ENC_LAN=$(url_encode "$LAN_BACKEND")
+ENC_TUNNEL=$(url_encode "$TUNNEL_URL")
+SETUP_URL_LAN="http://$LAN_IP:$FRONTEND_PORT/?backend=$ENC_LAN&token=$TOKEN"
+SETUP_URL_TUNNEL="http://$LAN_IP:$FRONTEND_PORT/?backend=$ENC_TUNNEL&token=$TOKEN"
 
 test_tunnel "$TUNNEL_URL" "$TOKEN"
+
+LAN_OK=no
+test_lan "$LAN_IP" && LAN_OK=yes
 
 echo
 echo "═══════════════════════════════════════════════════════════════"
 echo " Claude Code G2 is LIVE"
 echo "═══════════════════════════════════════════════════════════════"
 echo " Backend:        http://localhost:$BACKEND_PORT"
+echo " LAN backend:    $LAN_BACKEND  ($([ "$LAN_OK" = "yes" ] && echo reachable || echo "not reachable"))"
 echo " Tunnel:         $TUNNEL_URL"
 echo " Frontend:       http://$LAN_IP:$FRONTEND_PORT"
 echo " Bearer token:   $TOKEN"
 echo
-echo " SETUP URL (scan this or paste on the phone):"
-echo "   $SETUP_URL"
-echo
-qrencode -t ANSIUTF8 "$SETUP_URL"
+if [[ "$LAN_OK" == "yes" ]]; then
+  echo " ► PRIMARY (recommended — phone on same network as Mac):"
+  echo "   $SETUP_URL_LAN"
+  echo
+  qrencode -t ANSIUTF8 "$SETUP_URL_LAN"
+  echo
+  echo " Fallback (phone on cellular without LAN access):"
+  echo "   $SETUP_URL_TUNNEL"
+else
+  echo " ► PRIMARY (Cloudflare tunnel):"
+  echo "   $SETUP_URL_TUNNEL"
+  echo
+  qrencode -t ANSIUTF8 "$SETUP_URL_TUNNEL"
+  echo
+  echo " ⚠ LAN at $LAN_BACKEND is NOT reachable from the local interface."
+  echo "   This usually means the Mac doesn't have a LAN address yet."
+fi
 echo
 echo " Scan the QR in the Even Realities App."
 echo " The companion pane auto-fills both fields; green dot = connected."

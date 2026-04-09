@@ -20,7 +20,7 @@ const app = express()
 // -------- request logger -----------------------------------------------------
 // Paths that fire constantly and would drown the signal. We still log them
 // on error (≥400) so real problems surface.
-const QUIET_PATHS = new Set(['/api/health', '/api/events'])
+const QUIET_PATHS = new Set(['/api/health', '/api/events', '/api/ping'])
 
 app.use((req, res, next) => {
   // Skip preflight noise entirely; it's handled by the CORS middleware below.
@@ -64,9 +64,14 @@ app.use((req, res, next) => {
   next()
 })
 
-// -------- public route: health (no auth) --------------------------------------
+// -------- public routes (no auth) --------------------------------------------
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'cc-g2-backend' })
+})
+// Plain-text /api/ping for diagnostics. Some embedded WebViews choke on
+// JSON parsing — `pong` is hard to get wrong.
+app.get('/api/ping', (_req, res) => {
+  res.type('text/plain').send('pong')
 })
 
 // -------- authenticated routes below ------------------------------------------
