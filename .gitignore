@@ -12,3 +12,14 @@ frontend/vite.config.js
 # Glasses simulator / HUD capture screenshots
 glasses_*.png
 frontend/glasses_*.png
+
+# Scratch files at the repo root (commonly created by Claude during voice
+# tests when the user says "make a hello.py", "create calculator.py", etc).
+# Anything you actually want to keep should live in backend/, frontend/,
+# or a dedicated subfolder.
+/*.py
+/*.txt
+/*.js
+/PONG*
+/HELLO*
+!/README.md
