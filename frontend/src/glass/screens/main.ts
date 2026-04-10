@@ -151,29 +151,42 @@ function renderDeleteConfirm(snapshot: AppSnapshot): { lines: ReturnType<typeof 
   }
 }
 
-// Full-screen transcript renderer — 576px wide, ~38 chars/line, 8 content lines.
+// Scroll bar: 7-char bar showing position in transcript.
+// Uses ░ for track and ▓ for thumb. Shows direction arrows at edges.
+// Examples:
+//   At bottom (newest):  ░░░░░▓▓   (thumb at right/bottom)
+//   At top (oldest):     ▓▓░░░░░   (thumb at left/top)
+//   Middle:              ░░▓▓░░░
+//   No scroll needed:    (empty string)
+function scrollBar(totalLines: number, visibleLines: number, offset: number): string {
+  if (totalLines <= visibleLines) return ''
+  const barLen = 7
+  const maxOffset = totalLines - visibleLines
+  const clampedOffset = Math.min(offset, maxOffset)
+  // offset=0 means viewing newest (bottom). Bar reads left=top, right=bottom.
+  // So offset=0 → thumb at right end, offset=max → thumb at left end.
+  const ratio = maxOffset > 0 ? clampedOffset / maxOffset : 0
+  const thumbSize = Math.max(1, Math.round((visibleLines / totalLines) * barLen))
+  // ratio=0 (bottom/newest) → thumbStart near right. ratio=1 (top/oldest) → thumbStart=0.
+  const thumbStart = Math.round((1 - ratio) * (barLen - thumbSize))
+  let bar = ''
+  for (let i = 0; i < barLen; i++) {
+    if (i >= thumbStart && i < thumbStart + thumbSize) bar += '▓'
+    else bar += '░'
+  }
+  // Direction arrows: ▲ if can scroll up (older), ▼ if can scroll down (newer)
+  const canUp = clampedOffset < maxOffset
+  const canDown = clampedOffset > 0
+  const arrows = (canUp ? '▲' : ' ') + (canDown ? '▼' : ' ')
+  return `${arrows} ${bar}`
+}
+
+// Full-screen transcript renderer — 576px wide, ~38 chars/line, 7 content lines.
 function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof line>[] } {
   const active = snapshot.sessions.find((s) => s.id === snapshot.activeSessionId)
   const lines = []
 
-  // Header: session title + status
-  if (snapshot.error) {
-    lines.push(line(`◆ ! ${truncate(snapshot.error, 34)}`))
-  } else if (active && snapshot.activeBusy) {
-    const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
-    const status = lastTool && lastTool.kind === 'tool_use'
-      ? humanToolProgress(lastTool.name, lastTool.input)
-      : 'thinking…'
-    lines.push(line(`◆ ${truncate(active.title, 16)} · ${truncate(status, 18)}`))
-  } else if (active) {
-    const scrollTag = snapshot.sessionScrollOffset > 0 ? ` ▲${snapshot.sessionScrollOffset}` : ''
-    lines.push(line(`◆ ${truncate(active.title, 32)}${scrollTag}`))
-  } else {
-    lines.push(line('◆ CLAUDE CODE'))
-  }
-  lines.push(separator())
-
-  // Transcript body — 7 visible content lines
+  // Transcript body lines (computed first so we can build the scroll bar)
   const allLines = transcriptToLines(snapshot.transcript)
   const VISIBLE = 7
   const totalLines = allLines.length
@@ -181,6 +194,25 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
   const offset = Math.min(snapshot.sessionScrollOffset, maxOffset)
   const startLine = Math.max(0, totalLines - VISIBLE - offset)
   const visible = allLines.slice(startLine, startLine + VISIBLE)
+
+  // Scroll bar for the header
+  const bar = scrollBar(totalLines, VISIBLE, offset)
+
+  // Header: session title + status + scroll bar
+  if (snapshot.error) {
+    lines.push(line(`◆ ! ${truncate(snapshot.error, 34)}`))
+  } else if (active && snapshot.activeBusy) {
+    const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
+    const status = lastTool && lastTool.kind === 'tool_use'
+      ? humanToolProgress(lastTool.name, lastTool.input)
+      : 'thinking…'
+    lines.push(line(`◆ ${truncate(active.title, 14)} · ${truncate(status, 14)} ${bar}`))
+  } else if (active) {
+    lines.push(line(`◆ ${truncate(active.title, bar ? 26 : 36)} ${bar}`))
+  } else {
+    lines.push(line('◆ CLAUDE CODE'))
+  }
+  lines.push(separator())
 
   for (const l of visible) lines.push(line(l))
 
