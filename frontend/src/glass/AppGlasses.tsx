@@ -4,6 +4,7 @@ import { useGlasses } from 'even-toolkit/useGlasses'
 import { appSplash } from './splash'
 import { toDisplayData, onGlassAction } from './selectors'
 import { toSplitView } from './splitView'
+import { loadClaudeLogo } from './logo'
 import type { AppSnapshot, AppActions } from './shared'
 import { isRecordingMode, store, useAppState } from '../store'
 import {
@@ -372,12 +373,25 @@ export function AppGlasses() {
 
   // Dynamic page mode: full-screen text when a session is active (no sidebar
   // eating 31% of screen), split view only for session browser (no active session).
+  // Load Claude logo PNG for the sidebar/home screen.
+  const [logoTiles, setLogoTiles] = useState<
+    { id: number; name: string; bytes: Uint8Array; x: number; y: number; w: number; h: number }[]
+  >([])
+  useEffect(() => {
+    void loadClaudeLogo().then((bytes) => {
+      if (bytes) {
+        // Position: top-right corner, 80x80 (scaled down from original).
+        setLogoTiles([{ id: 1, name: 'claude', bytes, x: 480, y: 0, w: 80, h: 80 }])
+      }
+    })
+  }, [])
+
   const getPageMode = useCallback((screen: string) => {
     if (screen !== 'main') return 'text' as const
     const snap = snapshotRef.current
-    // Split view for browsing sessions (sidebar visible, no active session content)
-    if (!snap.activeSessionId || snap.sidebarVisible) return 'split' as const
-    // Full-screen transcript for active session
+    // Home mode for sidebar (shows Claude logo image + text list).
+    // Text mode for active session transcript (full-screen, no images).
+    if (!snap.activeSessionId || snap.sidebarVisible) return 'home' as const
     return 'text' as const
   }, [])
 
@@ -390,6 +404,7 @@ export function AppGlasses() {
     appName: 'CLAUDE CODE G2',
     splash: appSplash,
     getPageMode,
+    homeImageTiles: logoTiles.length > 0 ? logoTiles : undefined,
   })
 
   return null
