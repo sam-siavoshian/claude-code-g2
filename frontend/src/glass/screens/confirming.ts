@@ -14,12 +14,12 @@ export const confirmingScreen: GlassScreen<AppSnapshot, AppActions> = {
     const flow = snapshot.confirmTranscriptFlow
     const flowLabel = flow === 'new' ? 'new session' : 'follow-up'
 
-    // Word-wrap to full width (~38 chars) with quote marks.
+    // Word-wrap to full width (~44 chars) with quote marks.
     const wrapped: string[] = []
     const words = text.split(/\s+/)
     let cur = ''
     for (const w of words) {
-      if (cur.length + 1 + w.length > 36) {
+      if (cur.length + 1 + w.length > 42) {
         wrapped.push(cur)
         cur = w
       } else {

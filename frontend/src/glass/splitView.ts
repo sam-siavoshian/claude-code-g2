@@ -34,7 +34,7 @@ function basename(raw: unknown): string {
 const SIDEBAR_W = 180
 const HEADER_H = 40
 const SIDEBAR_LABEL_LEN = 13  // #2: wider labels — proportional font fits ~14 chars in 180px
-const RIGHT_COLS = 28
+const RIGHT_COLS = 32
 
 export function buildSidebarItems(snapshot: AppSnapshot): SidebarItem[] {
   const items: SidebarItem[] = snapshot.sessions.map((s) => ({

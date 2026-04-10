@@ -5,8 +5,9 @@ import type { AppSnapshot, AppActions } from '../shared'
 import { buildSidebarItems } from '../splitView'
 import type { TranscriptEvent } from '../../types'
 
-// Full width = ~38 chars on the proportional LVGL font (576px).
-const FULL_COLS = 38
+// Full width on 576px display. LVGL proportional font at 22px with 12px
+// padding each side = 552px usable. Average char ~12-13px = ~44 chars.
+const FULL_COLS = 44
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
@@ -51,9 +52,9 @@ function humanToolProgress(name: string, input: unknown): string {
     case 'Read': return `Reading ${basename(inp?.file_path ?? inp?.path)}…`
     case 'Write': return `Writing ${basename(inp?.file_path)}…`
     case 'Edit': return `Editing ${basename(inp?.file_path)}…`
-    case 'Bash': return `Running: ${truncate(String(inp?.command ?? '…'), 20)}`
-    case 'Grep': return `Searching ${truncate(String(inp?.pattern ?? ''), 16)}…`
-    case 'Glob': return `Finding ${truncate(String(inp?.pattern ?? ''), 16)}…`
+    case 'Bash': return `Running: ${truncate(String(inp?.command ?? '…'), 30)}`
+    case 'Grep': return `Searching ${truncate(String(inp?.pattern ?? ''), 28)}…`
+    case 'Glob': return `Finding ${truncate(String(inp?.pattern ?? ''), 28)}…`
     default: return `Running ${name}…`
   }
 }
@@ -76,8 +77,8 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
           const cmd = inp.command
           const pat = inp.pattern
           if (typeof fp === 'string') suffix = '(' + basename(fp) + ')'
-          else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 18) + ')'
-          else if (typeof pat === 'string') suffix = '(' + truncate(pat, 18) + ')'
+          else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 28) + ')'
+          else if (typeof pat === 'string') suffix = '(' + truncate(pat, 28) + ')'
         }
         out.push(`>> ${ev.name}${suffix}`)
         break
@@ -119,7 +120,7 @@ function renderSidebar(snapshot: AppSnapshot, nav: { highlightedIndex: number })
       continue
     }
     const dot = item.isActive ? '●' : (item.busy ? '◐' : '○')
-    const label = truncate(item.label, 32)
+    const label = truncate(item.label, 38)
     if (i === highlighted) {
       lines.push(line(`[${dot} ${label}]`))
     } else {
@@ -141,7 +142,7 @@ function renderDeleteConfirm(snapshot: AppSnapshot): { lines: ReturnType<typeof 
   const remaining = Math.ceil((ca.expiresAt - Date.now()) / 1000)
   return {
     lines: [
-      line(`Delete "${truncate(ca.title, 30)}"?`),
+      line(`Delete "${truncate(ca.title, 34)}"?`),
       separator(),
       line('This cannot be undone.'),
       line(''),
@@ -202,19 +203,19 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
   // When busy: ◐ spinning indicator + tool progress
   // When done: ✓ DONE prominently in header — unmissable signal to talk again
   if (snapshot.error) {
-    lines.push(line(`◆ ! ${truncate(snapshot.error, 34)}`))
+    lines.push(line(`◆ ! ${truncate(snapshot.error, 40)}`))
   } else if (active && snapshot.activeBusy) {
     const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
     const status = lastTool && lastTool.kind === 'tool_use'
       ? humanToolProgress(lastTool.name, lastTool.input)
       : 'thinking…'
-    lines.push(line(`◐ ${truncate(active.title, 14)} · ${truncate(status, 14)} ${bar}`))
+    lines.push(line(`◐ ${truncate(active.title, 16)} · ${truncate(status, 16)} ${bar}`))
   } else if (active) {
     // Check if Claude just finished (last event is a 'result')
     const lastEvent = snapshot.transcript[snapshot.transcript.length - 1]
     const justFinished = lastEvent?.kind === 'result' && !lastEvent.isError
     const prefix = justFinished ? '✓ DONE' : '◆'
-    const titleLen = bar ? (justFinished ? 20 : 26) : (justFinished ? 28 : 36)
+    const titleLen = bar ? (justFinished ? 24 : 30) : (justFinished ? 34 : 40)
     lines.push(line(`${prefix} ${truncate(active.title, titleLen)} ${bar}`))
   } else {
     lines.push(line('◆ CLAUDE CODE'))

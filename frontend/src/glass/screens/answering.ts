@@ -39,7 +39,7 @@ export const answeringScreen: GlassScreen<AppSnapshot, AppActions> = {
     const lines = [
       line('◆ CLAUDE ASKS:'),
       line('━'.repeat(40), 'meta'),
-      line(`  ${truncate(q.text, 38)}`),
+      line(`  ${truncate(q.text, 42)}`),
       line(''),
     ]
 

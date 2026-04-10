@@ -24,7 +24,7 @@ export const pickingScreen: GlassScreen<AppSnapshot, AppActions> = {
     lines.push(line(`PICK PROJECT  ${list.length - 1} dirs`, 'meta'))
     lines.push(line('━'.repeat(40), 'meta'))
     if (heard) {
-      lines.push(line(`> ${truncate(heard, 38)}`))
+      lines.push(line(`> ${truncate(heard, 42)}`))
     }
 
     lines.push(...buildScrollableList({
