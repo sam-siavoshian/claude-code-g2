@@ -199,6 +199,8 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
   const bar = scrollBar(totalLines, VISIBLE, offset)
 
   // Header: session title + status + scroll bar
+  // When busy: ◐ spinning indicator + tool progress
+  // When done: ✓ DONE prominently in header — unmissable signal to talk again
   if (snapshot.error) {
     lines.push(line(`◆ ! ${truncate(snapshot.error, 34)}`))
   } else if (active && snapshot.activeBusy) {
@@ -206,9 +208,14 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
     const status = lastTool && lastTool.kind === 'tool_use'
       ? humanToolProgress(lastTool.name, lastTool.input)
       : 'thinking…'
-    lines.push(line(`◆ ${truncate(active.title, 14)} · ${truncate(status, 14)} ${bar}`))
+    lines.push(line(`◐ ${truncate(active.title, 14)} · ${truncate(status, 14)} ${bar}`))
   } else if (active) {
-    lines.push(line(`◆ ${truncate(active.title, bar ? 26 : 36)} ${bar}`))
+    // Check if Claude just finished (last event is a 'result')
+    const lastEvent = snapshot.transcript[snapshot.transcript.length - 1]
+    const justFinished = lastEvent?.kind === 'result' && !lastEvent.isError
+    const prefix = justFinished ? '✓ DONE' : '◆'
+    const titleLen = bar ? (justFinished ? 20 : 26) : (justFinished ? 28 : 36)
+    lines.push(line(`${prefix} ${truncate(active.title, titleLen)} ${bar}`))
   } else {
     lines.push(line('◆ CLAUDE CODE'))
   }
@@ -219,9 +226,20 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
   // Pad to 9, action hint at line 10
   while (lines.length < 9) lines.push(line(''))
 
-  const hint = snapshot.activeBusy
-    ? '2tap: menu'
-    : 'tap: talk · swipe: scroll · 2tap: menu'
+  // Bottom hint: unmistakable state signal.
+  // BUSY:  "◐ claude is working…" — don't interrupt
+  // DONE:  "✓ tap to talk" — your turn, go ahead
+  // IDLE:  "tap to talk · 2tap: menu" — ready
+  let hint: string
+  if (snapshot.activeBusy) {
+    hint = '◐ claude is working… · 2tap: menu'
+  } else {
+    const lastEvent = snapshot.transcript[snapshot.transcript.length - 1]
+    const justFinished = lastEvent?.kind === 'result' && !lastEvent.isError
+    hint = justFinished
+      ? '✓ tap to talk · 2tap: menu'
+      : 'tap to talk · 2tap: menu'
+  }
   lines.push(line(hint, 'meta'))
 
   return { lines: lines.slice(0, 10) }
