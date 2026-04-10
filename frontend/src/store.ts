@@ -6,6 +6,7 @@ import type {
   SessionSummary,
   TranscriptEvent,
 } from './types'
+import type { ConfirmAction, PendingQuestion } from './glass/shared'
 
 export interface AppState {
   backendUrl: string | null
@@ -29,9 +30,19 @@ export interface AppState {
   error: string | null
 
   navIndex: number
-  // Scroll offset from the bottom (0 = stick to latest). Matches
-  // buildChatDisplay's scroll semantics.
   sessionScrollOffset: number
+
+  // Phase 2
+  confirmAction: ConfirmAction | null
+  lastActivityAt: number
+  transcriptCache: Record<string, TranscriptEvent[]>
+
+  // Phase 3
+  confirmTranscriptFlow: 'new' | 'turn' | null
+  pendingQuestion: PendingQuestion | null
+
+  scrollingTranscript: boolean
+  sidebarVisible: boolean
 }
 
 const initialState: AppState = {
@@ -57,6 +68,15 @@ const initialState: AppState = {
 
   navIndex: 0,
   sessionScrollOffset: 0,
+
+  confirmAction: null,
+  lastActivityAt: Date.now(),
+  transcriptCache: {},
+
+  confirmTranscriptFlow: null,
+  pendingQuestion: null,
+  scrollingTranscript: false,
+  sidebarVisible: false,
 }
 
 let state: AppState = initialState
@@ -89,6 +109,9 @@ function isSameEvent(a: TranscriptEvent, b: TranscriptEvent): boolean {
   if (a.kind === 'user' && b.kind === 'user') return a.text === b.text
   return true
 }
+
+// Max number of session transcripts to cache for quick-switch.
+const CACHE_MAX = 5
 
 export const store = {
   getState(): AppState {
@@ -130,27 +153,38 @@ export const store = {
     set({ sessions })
   },
   upsertSession(s: SessionSummary): void {
-    // Most updates move the touched session to the top — avoid a full re-sort.
     const rest = state.sessions.filter((x) => x.id !== s.id)
     set({ sessions: [s, ...rest] })
   },
   deleteSession(id: string): void {
     set({ sessions: state.sessions.filter((s) => s.id !== id) })
     if (state.activeSessionId === id) {
-      // Stay in 'main' (split view); just clear the active session.
       set({ activeSessionId: null, activeTranscript: [] })
+    }
+    // Remove from cache
+    if (state.transcriptCache[id]) {
+      const { [id]: _, ...rest } = state.transcriptCache
+      set({ transcriptCache: rest })
     }
   },
   openSession(id: string, transcript: TranscriptEvent[]): void {
+    // Cache the transcript for quick-switch.
+    const cache = { ...state.transcriptCache, [id]: transcript }
+    // Evict oldest if over limit.
+    const keys = Object.keys(cache)
+    if (keys.length > CACHE_MAX) {
+      delete cache[keys[0]!]
+    }
     set({
       activeSessionId: id,
       activeTranscript: transcript,
       mode: 'main',
       sessionScrollOffset: 0,
+      transcriptCache: cache,
+      lastActivityAt: Date.now(),
     })
   },
   closeSession(): void {
-    // Stay in 'main' so the sidebar stays visible — just drop the active id.
     set({
       activeSessionId: null,
       activeTranscript: [],
@@ -159,16 +193,23 @@ export const store = {
   },
   pushTranscriptEvent(sessionId: string, ev: TranscriptEvent): void {
     if (sessionId !== state.activeSessionId) return
-    // Cheap dedup: if the previous event has the same timestamp, kind and
-    // (where relevant) id, treat it as a duplicate. This lets us mix live
-    // SSE events with a defensive getSession fetch without risking repeats.
     const last = state.activeTranscript[state.activeTranscript.length - 1]
     if (last && isSameEvent(last, ev)) return
-    set({
-      activeTranscript: [...state.activeTranscript, ev],
-      // Stick to the bottom on new events.
-      sessionScrollOffset: 0,
-    })
+    const newTranscript = [...state.activeTranscript, ev]
+    // Auto-scroll: if user is at the bottom (offset 0), stay there.
+    // If user manually scrolled up (offset > 0), preserve their position.
+    const update: Partial<AppState> = {
+      activeTranscript: newTranscript,
+      lastActivityAt: Date.now(),
+    }
+    if (state.sessionScrollOffset === 0) {
+      update.sessionScrollOffset = 0
+    }
+    set(update)
+    // Update cache too.
+    if (state.transcriptCache[sessionId]) {
+      set({ transcriptCache: { ...state.transcriptCache, [sessionId]: newTranscript } })
+    }
   },
 
   enterMode(mode: AppMode): void {
@@ -176,19 +217,23 @@ export const store = {
       mode,
       navIndex: 0,
       error: null,
+      lastActivityAt: Date.now(),
     }
     if (isRecordingMode(mode)) {
       next.recordStartedAt = Date.now()
-    } else {
+    } else if (mode !== 'transcribing') {
       next.recordStartedAt = null
     }
     set(next)
   },
   setNavIndex(i: number): void {
-    set({ navIndex: Math.max(0, i) })
+    set({ navIndex: Math.max(0, i), lastActivityAt: Date.now() })
   },
   setSessionScrollOffset(n: number): void {
-    set({ sessionScrollOffset: Math.max(0, n) })
+    // Clamp to [0, transcript length] so the "▲ N newer" indicator
+    // never grows past the actual number of scrollable lines.
+    const maxOffset = Math.max(0, state.activeTranscript.length)
+    set({ sessionScrollOffset: Math.max(0, Math.min(n, maxOffset)), lastActivityAt: Date.now() })
   },
 
   setPendingTranscript(text: string | null): void {
@@ -197,6 +242,31 @@ export const store = {
 
   setError(msg: string | null): void {
     set({ error: msg })
+  },
+
+  // Phase 2: Confirmation modal
+  setConfirmAction(action: ConfirmAction | null): void {
+    set({ confirmAction: action })
+  },
+
+  // Phase 3
+  setConfirmTranscriptFlow(flow: 'new' | 'turn' | null): void {
+    set({ confirmTranscriptFlow: flow })
+  },
+  setPendingQuestion(q: PendingQuestion | null): void {
+    set({ pendingQuestion: q })
+  },
+
+  setScrollingTranscript(v: boolean): void {
+    set({ scrollingTranscript: v })
+  },
+
+  setSidebarVisible(v: boolean): void {
+    set({ sidebarVisible: v, lastActivityAt: Date.now() })
+  },
+
+  getCachedTranscript(sessionId: string): TranscriptEvent[] | null {
+    return state.transcriptCache[sessionId] ?? null
   },
 }
 

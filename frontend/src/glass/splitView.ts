@@ -1,56 +1,40 @@
 import type { SplitData, GlassNavState } from 'even-toolkit/types'
 import type { AppSnapshot } from './shared'
+import type { SidebarItem } from './shared'
 import type { TranscriptEvent } from '../types'
 
-// truncate() in even-toolkit/text-utils appends '~' which looks like part of
-// the word in a proportional font. Roll our own with a real ellipsis.
+export type { SidebarItem }
+
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
   if (maxLen <= 1) return text.slice(0, maxLen)
   return text.slice(0, maxLen - 1) + '…'
 }
 
-// -----------------------------------------------------------------------------
-// Split-view renderer for the 'main' screen.
+function basename(raw: unknown): string {
+  if (typeof raw !== 'string') return '?'
+  return raw.split('/').pop() ?? raw
+}
+
+// Layout: 576x288, proportional LVGL green font.
+// Every character matters. Zero empty rows.
 //
-// IMPORTANT: the G2 LVGL font is PROPORTIONAL, so we can't right-align with
-// spaces or pad columns to fixed widths. Every alignment trick that worked on
-// my fixed-width unit tests came out broken on real hardware. This file
-// deliberately uses no padding tricks — just one short line of text per row,
-// with markers that read clearly in a proportional font.
-//
-// Layout (576x288):
-//
-//   ┌─────────┬───────────────────────────────────────┐  40px header
-//   │ * CLAUDE                <session title> · ready │
-//   ├─────────┼───────────────────────────────────────┤
-//   │ > sess  │ > make a hello.txt file               │
-//   │   sess  │ I'll do that.                         │  248px
-//   │ * sess  │ >> Write(hello.txt)                   │  panes
-//   │   sess  │ done.                                 │
-//   │         │                                       │
-//   │ [+] new │ > tap to talk                         │
-//   └─────────┴───────────────────────────────────────┘
-//      180px                  396px
-//
-// Markers:
-//   "> "    cursor on this row (highlighted by user)
-//   "* "    this row is the currently active session
-//   "  "    nothing
-//   "[+]"   the new-session button (last row)
-// -----------------------------------------------------------------------------
+//   ┌──────────────┬────────────────────────────────┐  40px header
+//   │              │ ◆ fix pong · Reading test.ts…   │
+//   ├──────────────┼────────────────────────────────┤
+//   │ ● fix pong t │ > fix the pong test            │
+//   │ ◐ write API  │ │ Looking at the test file     │  248px
+//   │ [○ hello wor]│ >> Read(test.ts)               │
+//   │              │   export function pong()       │
+//   │              │ │ Found the bug.               │
+//   │     [+ new]  │ tap: open · 2tap: delete       │
+//   └──────────────┴────────────────────────────────┘
+//       180px                  396px
 
 const SIDEBAR_W = 180
 const HEADER_H = 40
-const SIDEBAR_LABEL_LEN = 11
+const SIDEBAR_LABEL_LEN = 13  // #2: wider labels — proportional font fits ~14 chars in 180px
 const RIGHT_COLS = 28
-
-export interface SidebarItem {
-  kind: 'session' | 'new'
-  id?: string
-  label: string
-  isActive?: boolean
-}
 
 export function buildSidebarItems(snapshot: AppSnapshot): SidebarItem[] {
   const items: SidebarItem[] = snapshot.sessions.map((s) => ({
@@ -58,8 +42,9 @@ export function buildSidebarItems(snapshot: AppSnapshot): SidebarItem[] {
     id: s.id,
     label: s.title,
     isActive: s.id === snapshot.activeSessionId,
+    busy: s.busy,
   }))
-  items.push({ kind: 'new', label: 'new' })
+  items.push({ kind: 'new', label: '+ new' })
   return items
 }
 
@@ -89,6 +74,21 @@ function wrapText(text: string, width: number, prefix = ''): string[] {
   return out
 }
 
+function humanToolProgress(name: string, input: unknown): string {
+  const inp = input as Record<string, unknown> | null
+  switch (name) {
+    case 'Read': return `Reading ${basename(inp?.file_path ?? inp?.path)}…`
+    case 'Write': return `Writing ${basename(inp?.file_path)}…`
+    case 'Edit': return `Editing ${basename(inp?.file_path)}…`
+    case 'Bash': return `Running: ${truncate(String(inp?.command ?? '…'), 18)}`
+    case 'Grep': return `Searching ${truncate(String(inp?.pattern ?? ''), 14)}…`
+    case 'Glob': return `Finding ${truncate(String(inp?.pattern ?? ''), 14)}…`
+    case 'WebSearch': return 'Searching web…'
+    case 'WebFetch': return 'Fetching URL…'
+    default: return `Running ${name}…`
+  }
+}
+
 function transcriptToLines(transcript: TranscriptEvent[]): string[] {
   const out: string[] = []
   for (const ev of transcript) {
@@ -97,7 +97,7 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
         out.push(...wrapText(ev.text, RIGHT_COLS, '> '))
         break
       case 'assistant_text':
-        out.push(...wrapText(ev.text, RIGHT_COLS))
+        out.push(...wrapText(ev.text, RIGHT_COLS, '│ '))
         break
       case 'tool_use': {
         const inp = ev.input as Record<string, unknown> | null
@@ -106,7 +106,7 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
           const fp = inp.file_path ?? inp.path
           const cmd = inp.command
           const pat = inp.pattern
-          if (typeof fp === 'string') suffix = '(' + (fp.split('/').pop() ?? fp) + ')'
+          if (typeof fp === 'string') suffix = '(' + basename(fp) + ')'
           else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 14) + ')'
           else if (typeof pat === 'string') suffix = '(' + truncate(pat, 14) + ')'
         }
@@ -114,7 +114,14 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
         break
       }
       case 'tool_result':
-        if (ev.isError) out.push(...wrapText('! ' + (ev.content || 'error'), RIGHT_COLS))
+        if (ev.isError) {
+          out.push(...wrapText('! ' + (ev.content || 'error'), RIGHT_COLS))
+        } else if (ev.content) {
+          const firstLine = ev.content.split('\n').find((l) => l.trim().length > 0)
+          if (firstLine) {
+            out.push(`  ${truncate(firstLine.trim(), RIGHT_COLS - 2)}`)
+          }
+        }
         break
       case 'result':
         if (ev.isError) out.push('! turn failed')
@@ -127,22 +134,46 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
   return out
 }
 
-function buildHeader(snapshot: AppSnapshot): string {
-  // Two short lines. No right-alignment, no padding.
-  // Line 1: brand. Line 2: active session title or "ready".
-  const brand = '* CLAUDE CODE'
-  const status = snapshot.activeBusy ? 'thinking...' : 'ready'
-  const active = snapshot.sessions.find((s) => s.id === snapshot.activeSessionId)
-  if (active) {
-    return `${brand}\n${truncate(active.title, 26)} · ${status}`
+function thinkingStatus(snapshot: AppSnapshot): string {
+  const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
+  if (lastTool && lastTool.kind === 'tool_use') {
+    return humanToolProgress(lastTool.name, lastTool.input)
   }
-  return `${brand}\n${status}`
+  const lastEvent = snapshot.transcript[snapshot.transcript.length - 1]
+  if (lastEvent) {
+    const elapsed = Math.round((Date.now() - lastEvent.ts) / 1000)
+    if (elapsed > 15) return `thinking… ${elapsed}s`
+  }
+  return 'thinking…'
+}
+
+// #3: Scroll indicator moved to header — frees 1 transcript row.
+// #6: Informative header — shows session count when idle, not just brand.
+function buildHeader(snapshot: AppSnapshot): string {
+  if (snapshot.error) return `◆ ! ${truncate(snapshot.error, 36)}`
+
+  // #3: Scroll offset in header when scrolled up
+  const scrollTag = snapshot.sessionScrollOffset > 0
+    ? ` ▲${snapshot.sessionScrollOffset}`
+    : ''
+
+  const active = snapshot.sessions.find((s) => s.id === snapshot.activeSessionId)
+  if (!active) {
+    // #6: Show session count instead of brand when idle
+    const n = snapshot.sessions.length
+    if (n === 0) return '◆ no sessions · tap [+]'
+    return `◆ ${n} session${n === 1 ? '' : 's'} · swipe to browse`
+  }
+  if (snapshot.activeBusy) {
+    const status = thinkingStatus(snapshot)
+    return `◆ ${truncate(active.title, 16)} · ${truncate(status, 16)}${scrollTag}`
+  }
+  return `◆ ${truncate(active.title, 34)}${scrollTag}`
 }
 
 function buildLeftPane(items: SidebarItem[], highlightedIndex: number): string {
   const sessionItems = items.filter((i) => i.kind === 'session')
 
-  // Sliding window centered on the highlighted item, capped at 8 visible.
   const VISIBLE = 8
   const visibleSlots = Math.min(VISIBLE, sessionItems.length)
   const start = Math.max(
@@ -160,50 +191,110 @@ function buildLeftPane(items: SidebarItem[], highlightedIndex: number): string {
     const item = slice[i]!
     const isHighlighted = idx === highlightedIndex
     const isActive = !!item.isActive
-    // Two-char marker that reads clearly in a proportional font:
-    //   "> " cursor here
-    //   "* " active session
-    //   "  " neither
-    //   ">*" cursor on the active session
-    let marker = '  '
-    if (isHighlighted && isActive) marker = '>*'
-    else if (isHighlighted) marker = '> '
-    else if (isActive) marker = '* '
-    rows.push(`${marker}${truncate(item.label, SIDEBAR_LABEL_LEN)}`)
+    const dot = isActive ? '●' : (item.busy ? '◐' : '○')
+    const label = truncate(item.label, SIDEBAR_LABEL_LEN)
+
+    if (isHighlighted) {
+      rows.push(`[${dot} ${label}]`)
+    } else {
+      rows.push(` ${dot} ${label}`)
+    }
   }
 
-  // The new-session button. Brackets make it unmistakable as a button.
-  // Empty line above it for breathing room.
-  rows.push('')
+  if (start > 0) rows[0] = '  ▲ more'
+  if (start + visibleSlots < sessionItems.length) rows[rows.length - 1] = '  ▼ more'
+
   const newIdx = sessionItems.length
-  const newRow = newIdx === highlightedIndex ? '>[+] new' : ' [+] new'
-  rows.push(newRow)
+  if (newIdx === highlightedIndex) {
+    rows.push('[+ new]')
+  } else {
+    rows.push(' + new')
+  }
 
   return rows.join('\n')
 }
 
-function buildRightPane(snapshot: AppSnapshot): string {
+function actionHint(snapshot: AppSnapshot, items: SidebarItem[], highlightedIndex: number): string {
+  if (snapshot.confirmAction && Date.now() < snapshot.confirmAction.expiresAt) {
+    return 'tap: DELETE · 2tap: cancel'
+  }
+
+  const item = items[Math.min(highlightedIndex, items.length - 1)]
+  if (!item) return ''
+
+  if (item.kind === 'new') return 'tap: new session (voice)'
+  if (item.isActive) {
+    return snapshot.activeBusy ? '2tap: close' : 'tap: talk · 2tap: close'
+  }
+  return 'tap: open · 2tap: delete'
+}
+
+function buildRightPane(snapshot: AppSnapshot, items: SidebarItem[], highlightedIndex: number): string {
+  // #4: Empty state shows gesture cheat sheet instead of 1 wasted line.
   if (!snapshot.activeSessionId) {
-    // Minimal empty state. No marketing copy.
-    return '* CLAUDE CODE\n\ntap [+] in the\nsidebar to start.'
+    return [
+      'swipe: browse sessions',
+      'tap: open session',
+      '2tap: delete session',
+      '[+]: new voice session',
+      '',
+      'tap [+] to start',
+    ].join('\n')
+  }
+
+  // #7: Compact delete modal — 5 lines, not 9.
+  if (snapshot.confirmAction && Date.now() < snapshot.confirmAction.expiresAt) {
+    const ca = snapshot.confirmAction
+    const remaining = Math.ceil((ca.expiresAt - Date.now()) / 1000)
+    return [
+      `Delete "${truncate(ca.title, 24)}"?`,
+      'This cannot be undone.',
+      '',
+      `tap: DELETE · 2tap: cancel`,
+      `auto-cancel ${remaining}s…`,
+    ].join('\n')
   }
 
   const allLines = transcriptToLines(snapshot.transcript)
-  // Show the most recent ~10 lines without padding (let LVGL handle vertical
-  // alignment in the proportional font).
+  // #3: Full 10 rows for transcript — scroll indicator moved to header.
   const VISIBLE = 10
-  const visible = allLines.slice(Math.max(0, allLines.length - VISIBLE))
-  const promptLine = snapshot.activeBusy ? '... thinking' : '> tap to talk'
-  return visible.join('\n') + '\n\n' + promptLine
+  const totalLines = allLines.length
+  const maxOffset = Math.max(0, totalLines - VISIBLE)
+  const offset = Math.min(snapshot.sessionScrollOffset, maxOffset)
+  const startLine = Math.max(0, totalLines - VISIBLE - offset)
+  const visible = allLines.slice(startLine, startLine + VISIBLE)
+
+  // Last line is the action hint — replaces the last transcript line.
+  const hint = actionHint(snapshot, items, highlightedIndex)
+  if (visible.length >= VISIBLE) {
+    visible[visible.length - 1] = hint
+  } else {
+    visible.push(hint)
+  }
+
+  return visible.join('\n')
 }
 
 export function toSplitView(snapshot: AppSnapshot, nav: GlassNavState): SplitData {
+  if (
+    snapshot.lastActivityAt &&
+    Date.now() - snapshot.lastActivityAt > 30_000 &&
+    !snapshot.activeBusy
+  ) {
+    return {
+      header: '◆',
+      left: '',
+      right: 'tap to wake',
+      layout: { leftWidth: SIDEBAR_W, headerHeight: HEADER_H },
+    }
+  }
+
   const items = buildSidebarItems(snapshot)
   const highlighted = Math.max(0, Math.min(items.length - 1, nav.highlightedIndex))
   return {
     header: buildHeader(snapshot),
     left: buildLeftPane(items, highlighted),
-    right: buildRightPane(snapshot),
+    right: buildRightPane(snapshot, items, highlighted),
     layout: {
       leftWidth: SIDEBAR_W,
       headerHeight: HEADER_H,

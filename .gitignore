@@ -23,3 +23,4 @@ frontend/glasses_*.png
 /PONG*
 /HELLO*
 !/README.md
+.gstack/

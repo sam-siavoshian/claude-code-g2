@@ -1,25 +1,30 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router'
 import { buildScrollableList } from 'even-toolkit/glass-display-builders'
 import { moveHighlight } from 'even-toolkit/glass-nav'
-import { truncate } from 'even-toolkit/text-utils'
 import type { AppSnapshot, AppActions } from '../shared'
-import { brandedHeader, footer, padTo, line } from '../theme'
+import { line } from '../theme'
 
-const CANCEL_LABEL = '× cancel'
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  if (maxLen <= 1) return text.slice(0, maxLen)
+  return text.slice(0, maxLen - 1) + '…'
+}
 
 function items(snapshot: AppSnapshot): string[] {
-  return [...snapshot.projects, CANCEL_LABEL]
+  return [...snapshot.projects, '× cancel']
 }
 
 export const pickingScreen: GlassScreen<AppSnapshot, AppActions> = {
   display(snapshot, nav) {
     const list = items(snapshot)
-    const lines = [...brandedHeader('* PICK PROJECT', `${snapshot.projects.length} dirs`)]
+    const lines = []
 
-    // Show what Whisper heard so the user can sanity-check before committing.
+    // Compact header: what Whisper heard + project count
     const heard = (snapshot.pendingTranscript ?? '').trim()
+    lines.push(line(`PICK PROJECT  ${list.length - 1} dirs`, 'meta'))
+    lines.push(line('━'.repeat(40), 'meta'))
     if (heard) {
-      lines.push(line(`> ${truncate(heard, 38)}`, 'meta'))
+      lines.push(line(`> ${truncate(heard, 38)}`))
     }
 
     lines.push(...buildScrollableList({
@@ -29,9 +34,10 @@ export const pickingScreen: GlassScreen<AppSnapshot, AppActions> = {
       formatter: (item) => item,
     }))
 
-    const padded = padTo(lines, 9)
-    padded.push(footer('tap select · 2tap cancel'))
-    return { lines: padded }
+    // Fill to 10 lines, put action hint at bottom
+    while (lines.length < 9) lines.push(line(''))
+    lines.push(line('tap: select · 2tap: cancel', 'meta'))
+    return { lines }
   },
 
   action(action, nav, snapshot, ctx) {

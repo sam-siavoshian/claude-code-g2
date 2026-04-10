@@ -1,38 +1,21 @@
 import { useEffect, useState } from 'react'
-import { Card, Button, Input, StatusDot } from 'even-toolkit/web'
+import { Badge, Button, Input, StatusDot, Divider, Kbd } from 'even-toolkit/web'
 import { storageGet, storageSet, storageRemove } from 'even-toolkit/storage'
 import { store, useAppState } from '../store'
 import { bootstrap, checkHealth, deleteSession } from '../api'
 
-// Storage keys go through even-toolkit/storage so we work both in a plain
-// browser (localStorage) and inside the glasses WebView (bridge storage).
 const LS_URL = 'cc-g2.backendUrl'
 const LS_TOK = 'cc-g2.token'
 
-// Wrap storage in try/catch: sandboxed WebViews and some browser extensions
-// throw "Access to storage is not allowed from this context". We still want
-// the app to boot in that case — credentials just won't persist across reloads.
 async function safeGet(key: string): Promise<string> {
-  try {
-    return await storageGet<string>(key, '')
-  } catch (err) {
-    console.warn('[storage] read failed:', err)
-    return ''
-  }
+  try { return await storageGet<string>(key, '') }
+  catch { return '' }
 }
 async function safeSet(key: string, value: string): Promise<void> {
-  try {
-    await storageSet(key, value)
-  } catch (err) {
-    console.warn('[storage] write failed:', err)
-  }
+  try { await storageSet(key, value) } catch { /* sandboxed */ }
 }
 async function safeRemove(key: string): Promise<void> {
-  try {
-    await storageRemove(key)
-  } catch (err) {
-    console.warn('[storage] remove failed:', err)
-  }
+  try { await storageRemove(key) } catch { /* sandboxed */ }
 }
 
 function maskToken(tok: string | null): string {
@@ -41,13 +24,31 @@ function maskToken(tok: string | null): string {
   return tok.slice(0, 4) + '…' + tok.slice(-4)
 }
 
+function timeAgo(ts: number): string {
+  const sec = Math.floor((Date.now() - ts) / 1000)
+  if (sec < 60) return 'just now'
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`
+  return `${Math.floor(sec / 86400)}d ago`
+}
+
+// #8: Human-readable glasses state for companion pane.
+function glassesState(mode: string, activeBusy: boolean): { label: string; color: string } | null {
+  switch (mode) {
+    case 'recording-new': return { label: '● Recording (new session)', color: 'text-negative' }
+    case 'recording-turn': return { label: '● Recording (follow-up)', color: 'text-negative' }
+    case 'transcribing': return { label: '◐ Transcribing…', color: 'text-warning' }
+    case 'picking-project': return { label: 'Picking project…', color: 'text-text' }
+    case 'confirming-transcript': return { label: 'Confirming voice…', color: 'text-text' }
+    case 'answering': return { label: 'Claude asked a question', color: 'text-warning' }
+    default:
+      if (activeBusy) return { label: '◐ Claude is working…', color: 'text-warning' }
+      return null
+  }
+}
+
 interface DiagnoseResult {
-  url: string
-  ok: boolean
-  status?: number
-  bodySnippet?: string
-  error?: string
-  timeMs: number
+  url: string; ok: boolean; status?: number; bodySnippet?: string; error?: string; timeMs: number
 }
 
 function describeFetchError(err: unknown): string {
@@ -59,27 +60,14 @@ function describeFetchError(err: unknown): string {
 }
 
 async function runDiagnose(backendUrl: string): Promise<DiagnoseResult> {
-  // /api/ping returns plain-text "pong". Simpler than /api/health and avoids
-  // any JSON-parsing quirks in embedded WebViews.
   const target = backendUrl.replace(/\/$/, '') + '/api/ping'
   const start = Date.now()
   try {
     const res = await fetch(target, { method: 'GET' })
     const body = await res.text().catch(() => '')
-    return {
-      url: target,
-      ok: res.ok,
-      status: res.status,
-      bodySnippet: body.slice(0, 120),
-      timeMs: Date.now() - start,
-    }
+    return { url: target, ok: res.ok, status: res.status, bodySnippet: body.slice(0, 120), timeMs: Date.now() - start }
   } catch (err) {
-    return {
-      url: target,
-      ok: false,
-      error: describeFetchError(err),
-      timeMs: Date.now() - start,
-    }
+    return { url: target, ok: false, error: describeFetchError(err), timeMs: Date.now() - start }
   }
 }
 
@@ -89,13 +77,12 @@ export function Connect() {
   const [tokenInput, setTokenInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [diagnose, setDiagnose] = useState<DiagnoseResult | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [showSetup, setShowSetup] = useState(false)
+  // #1: Delete confirmation on companion pane
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null)
 
   useEffect(() => {
     void (async () => {
-      // Query-string handoff: ./dev.sh puts ?backend=<tunnel>&token=<bearer>
-      // into the QR code so a single scan pre-fills both fields. The backend
-      // value is URL-encoded by dev.sh, so URLSearchParams.get decodes it.
       const params = new URLSearchParams(window.location.search)
       const qsUrl = params.get('backend')
       const qsTok = params.get('token')
@@ -108,18 +95,16 @@ export function Connect() {
         await checkAndBoot(qsUrl, qsTok)
         return
       }
-      const [savedUrl, savedTok] = await Promise.all([
-        safeGet(LS_URL),
-        safeGet(LS_TOK),
-      ])
+      const [savedUrl, savedTok] = await Promise.all([safeGet(LS_URL), safeGet(LS_TOK)])
       if (savedUrl) setUrlInput(savedUrl)
       if (savedTok) setTokenInput(savedTok)
       if (savedUrl && savedTok) {
         store.setCredentials(savedUrl, savedTok)
         await checkAndBoot(savedUrl, savedTok)
+      } else {
+        setShowSetup(true)
       }
     })()
-    // One-shot hydrate; intentionally empty deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -128,14 +113,14 @@ export function Connect() {
     if (result.ok) {
       store.setConnection('ok')
       setDiagnose(null)
+      setShowSetup(false)
       await bootstrap()
     } else {
       const reason = result.failedUrl
         ? `${result.reason} (url: ${result.failedUrl})`
         : (result.reason ?? 'health check failed')
       store.setConnection('error', reason)
-      // Auto-run a diagnostic so the failure card shows the raw fetch
-      // result without the user having to tap a button.
+      setShowSetup(true)
       const diag = await runDiagnose(url)
       setDiagnose(diag)
     }
@@ -161,6 +146,7 @@ export function Connect() {
     setUrlInput('')
     setTokenInput('')
     setDiagnose(null)
+    setShowSetup(true)
   }
 
   async function onDiagnose() {
@@ -171,148 +157,163 @@ export function Connect() {
     setDiagnose(r)
   }
 
-  async function onCopyBackend() {
-    const url = state.backendUrl ?? urlInput
-    if (!url) return
+  async function onConfirmDelete() {
+    if (!deleteConfirm) return
     try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-
-  async function onDeleteSession(id: string) {
-    try {
-      await deleteSession(id)
-      store.deleteSession(id)
+      await deleteSession(deleteConfirm.id)
+      store.deleteSession(deleteConfirm.id)
     } catch (err) {
       console.error(err)
     }
+    setDeleteConfirm(null)
   }
 
   const configured = Boolean(state.backendUrl && state.token)
   const connected = state.connection === 'ok'
+  const activeBusy = state.activeTranscript.length > 0 &&
+    state.activeTranscript[state.activeTranscript.length - 1]?.kind !== 'result'
+  const gs = glassesState(state.mode, activeBusy)
 
   return (
-    <div className="px-3 pt-4 pb-8 space-y-4">
-      <Card className="p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-large-title">Claude Code G2</h2>
+    <div className="space-y-3">
+      {/* ── Status bar ── */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
           <StatusDot connected={connected} />
+          <span className="text-normal-subtitle">
+            {connected ? 'connected' : configured ? 'disconnected' : 'not configured'}
+          </span>
         </div>
-        <p className="text-normal-body text-text-dim">
-          Paste the backend URL and bearer token printed by the Mac Mini.
-        </p>
-
-        {configured ? (
-          <div className="rounded bg-surface p-2 text-normal-detail text-text-dim space-y-1">
-            <div className="truncate">
-              <span className="text-text">backend</span> {state.backendUrl}
-            </div>
-            <div>
-              <span className="text-text">token</span> {maskToken(state.token)}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-2">
-          <label className="text-normal-subtitle">Backend URL</label>
-          <Input
-            type="url"
-            placeholder="https://abc123.trycloudflare.com"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-normal-subtitle">Bearer Token</label>
-          <Input
-            type="password"
-            placeholder="..."
-            value={tokenInput}
-            onChange={(e) => setTokenInput(e.target.value)}
-          />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={onSave} disabled={saving || !urlInput || !tokenInput}>
-            {configured ? 'Reconnect' : 'Connect'}
+        <div className="flex items-center gap-2">
+          {configured && <Badge>{maskToken(state.token)}</Badge>}
+          <Button variant="ghost" size="sm" onClick={() => setShowSetup(!showSetup)}>
+            {showSetup ? 'hide' : 'setup'}
           </Button>
-          <Button variant="ghost" onClick={() => void onDiagnose()} disabled={!urlInput && !state.backendUrl}>
-            Diagnose
-          </Button>
-          {configured ? (
-            <>
-              <Button variant="ghost" onClick={() => void onCopyBackend()}>
-                {copied ? 'Copied!' : 'Copy URL'}
-              </Button>
-              <Button variant="ghost" onClick={() => void onLogout()}>Logout</Button>
-            </>
-          ) : null}
+        </div>
+      </div>
+
+      {/* #8: Glasses state indicator */}
+      {gs && (
+        <div className={`rounded bg-surface px-3 py-1.5 ${gs.color} text-normal-subtitle`}>
+          {gs.label}
+        </div>
+      )}
+
+      {state.connectionError && (
+        <div className="rounded bg-negative/10 px-3 py-2">
+          <div className="text-normal-detail text-negative break-words">{state.connectionError}</div>
+        </div>
+      )}
+
+      {showSetup && (
+        <div className="space-y-2 rounded bg-surface p-3">
+          <div className="space-y-1">
+            <label className="text-normal-detail text-text-dim">Backend URL</label>
+            <Input type="url" placeholder="https://abc.trycloudflare.com" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-normal-detail text-text-dim">Bearer token</label>
+            <Input type="password" placeholder="paste from terminal" value={tokenInput} onChange={(e) => setTokenInput(e.target.value)} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={onSave} disabled={saving || !urlInput || !tokenInput}>
+              {configured ? 'Reconnect' : 'Connect'}
+            </Button>
+            <Button variant="ghost" onClick={() => void onDiagnose()} disabled={!urlInput && !state.backendUrl}>Diagnose</Button>
+            {configured && <Button variant="ghost" onClick={() => void onLogout()}>Logout</Button>}
+          </div>
+          {diagnose && (
+            <div className="text-normal-detail space-y-1">
+              <div className="text-text-dim break-words">GET {diagnose.url}</div>
+              {diagnose.ok
+                ? <div className="text-positive">OK {diagnose.status} · {diagnose.timeMs}ms</div>
+                : <div className="text-negative break-words">FAIL {diagnose.error ?? `HTTP ${diagnose.status}`} · {diagnose.timeMs}ms</div>}
+              {diagnose.bodySnippet && <div className="text-text-dim break-words font-mono text-xs">{diagnose.bodySnippet}</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      <Divider />
+
+      {/* ── Sessions ── */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-normal-subtitle">Sessions</span>
+          <span className="text-normal-detail text-text-dim">
+            {state.sessions.length}{state.activeSessionId ? ' · 1 active' : ''}
+          </span>
         </div>
 
-        {state.connectionError ? (
-          <div className="rounded bg-negative/10 p-2">
-            <div className="text-normal-subtitle text-negative">Connection error</div>
-            <div className="text-normal-detail text-negative break-words">{state.connectionError}</div>
-          </div>
-        ) : null}
-
-        {diagnose ? (
-          <div className="rounded bg-surface p-2 space-y-1 text-normal-detail">
-            <div className="text-normal-subtitle">Diagnose</div>
-            <div className="break-words text-text-dim">GET {diagnose.url}</div>
-            {diagnose.ok ? (
-              <div className="text-positive">
-                ✓ HTTP {diagnose.status} · {diagnose.timeMs}ms
-              </div>
-            ) : (
-              <div className="text-negative break-words">
-                ✗ {diagnose.error ?? `HTTP ${diagnose.status}`} · {diagnose.timeMs}ms
-              </div>
-            )}
-            {diagnose.bodySnippet ? (
-              <div className="break-words text-text-dim">body: {diagnose.bodySnippet}</div>
-            ) : null}
-          </div>
-        ) : null}
-      </Card>
-
-      <Card className="p-4 space-y-2">
-        <h3 className="text-medium-title">Sessions ({state.sessions.length})</h3>
         {state.sessions.length === 0 ? (
-          <p className="text-normal-body text-text-dim">
-            No sessions yet. Put on the glasses and say something.
-          </p>
+          <div className="rounded bg-surface px-3 py-4 text-center">
+            <div className="text-normal-body text-text-dim">no sessions yet</div>
+            <div className="text-normal-detail text-text-dim mt-1">
+              put on glasses · tap <Kbd>[+]</Kbd> · speak
+            </div>
+          </div>
         ) : (
-          <ul className="space-y-2">
-            {state.sessions.map((s) => (
-              <li key={s.id} className="flex items-center justify-between gap-2 border-b border-border-light pb-2 last:border-0">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-normal-title">{s.title}</div>
-                  <div className="text-normal-detail text-text-dim">
-                    {s.projectName} · {new Date(s.lastActiveAt).toLocaleTimeString()}
+          <div className="space-y-1" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+            {[...state.sessions]
+              .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+              .map((s) => {
+                const isActive = s.id === state.activeSessionId
+                return (
+                  <div
+                    key={s.id}
+                    className={
+                      'flex items-center gap-2 rounded px-2 py-1.5 ' +
+                      (isActive ? 'bg-positive/10 border border-positive/20' : 'bg-surface')
+                    }
+                  >
+                    <div className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (isActive ? 'bg-positive' : s.busy ? 'bg-warning' : 'bg-text-dim/30')} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-normal-body">{s.title}</div>
+                      <div className="text-normal-detail text-text-dim">
+                        {s.projectName} · {timeAgo(s.lastActiveAt)}
+                        {s.busy ? ' · working…' : ''}
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => setDeleteConfirm({ id: s.id, title: s.title })}>
+                      ×
+                    </Button>
                   </div>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => void onDeleteSession(s.id)}>
-                  Delete
-                </Button>
-              </li>
-            ))}
-          </ul>
+                )
+              })}
+          </div>
         )}
-      </Card>
+      </div>
 
-      <Card className="p-4">
-        <h3 className="text-medium-title">Tips</h3>
-        <ul className="text-normal-body text-text-dim list-disc pl-4 space-y-1">
-          <li>Tap the temple once to select or record.</li>
-          <li>Swipe up/down to scroll.</li>
-          <li>Double-tap the temple to go back.</li>
-          <li>If connection fails, tap Diagnose — shows the raw fetch result.</li>
-        </ul>
-      </Card>
+      {/* #1: Delete confirmation modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-6">
+          <div className="rounded-lg bg-surface p-4 space-y-3 max-w-sm w-full shadow-lg">
+            <div className="text-normal-title">Delete session?</div>
+            <div className="text-normal-body text-text-dim">
+              "{deleteConfirm.title}" will be permanently deleted. This cannot be undone.
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+              <Button onClick={() => void onConfirmDelete()}>Delete</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Divider />
+
+      {/* ── Gesture reference ── */}
+      <div className="space-y-1">
+        <div className="text-normal-detail text-text-dim font-semibold">Glasses controls</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-normal-detail text-text-dim">
+          <span><Kbd>swipe ↑↓</Kbd> scroll list</span>
+          <span><Kbd>tap</Kbd> select / record</span>
+          <span><Kbd>2tap</Kbd> delete / cancel</span>
+          <span><Kbd>[+]</Kbd> new voice session</span>
+          <span><Kbd>tap</Kbd> on active = follow-up</span>
+          <span><Kbd>2tap</Kbd> on active = close+delete</span>
+        </div>
+      </div>
     </div>
   )
 }

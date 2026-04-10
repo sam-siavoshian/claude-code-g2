@@ -3,70 +3,283 @@ import { line, separator } from 'even-toolkit/types'
 import { moveHighlight } from 'even-toolkit/glass-nav'
 import type { AppSnapshot, AppActions } from '../shared'
 import { buildSidebarItems } from '../splitView'
+import type { TranscriptEvent } from '../../types'
 
-// The 'main' screen is rendered in split mode (toSplit) by useGlasses, so
-// display() does not normally fire — but we still need a real fallback for
-// when split mode hasn't initialized yet (e.g. during the first paint after
-// the splash, or on a host that doesn't support split layouts).
-//
-// All gesture handling for the split layout lives here. The toolkit puts an
-// invisible isEventCapture=1 overlay container on top of the split layout,
-// which forwards every gesture to this action handler.
+// Full width = ~38 chars on the proportional LVGL font (576px).
+const FULL_COLS = 38
+
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  if (maxLen <= 1) return text.slice(0, maxLen)
+  return text.slice(0, maxLen - 1) + '…'
+}
+
+function basename(raw: unknown): string {
+  if (typeof raw !== 'string') return '?'
+  return raw.split('/').pop() ?? raw
+}
+
+function wrapText(text: string, width: number, prefix = ''): string[] {
+  const words = text.replace(/\s+/g, ' ').trim().split(' ')
+  if (words.length === 0 || (words.length === 1 && words[0] === '')) return ['']
+  const indent = ' '.repeat(prefix.length)
+  const out: string[] = []
+  let cur = ''
+  let isFirst = true
+  for (const w of words) {
+    const pfx = isFirst ? prefix : indent
+    const room = width - pfx.length
+    if (cur.length === 0) {
+      cur = w.length <= room ? w : w.slice(0, room)
+      continue
+    }
+    if (cur.length + 1 + w.length <= room) {
+      cur += ' ' + w
+    } else {
+      out.push(pfx + cur)
+      isFirst = false
+      cur = w.length <= width - indent.length ? w : w.slice(0, width - indent.length)
+    }
+  }
+  if (cur) out.push((isFirst ? prefix : indent) + cur)
+  return out
+}
+
+function humanToolProgress(name: string, input: unknown): string {
+  const inp = input as Record<string, unknown> | null
+  switch (name) {
+    case 'Read': return `Reading ${basename(inp?.file_path ?? inp?.path)}…`
+    case 'Write': return `Writing ${basename(inp?.file_path)}…`
+    case 'Edit': return `Editing ${basename(inp?.file_path)}…`
+    case 'Bash': return `Running: ${truncate(String(inp?.command ?? '…'), 20)}`
+    case 'Grep': return `Searching ${truncate(String(inp?.pattern ?? ''), 16)}…`
+    case 'Glob': return `Finding ${truncate(String(inp?.pattern ?? ''), 16)}…`
+    default: return `Running ${name}…`
+  }
+}
+
+function transcriptToLines(transcript: TranscriptEvent[]): string[] {
+  const out: string[] = []
+  for (const ev of transcript) {
+    switch (ev.kind) {
+      case 'user':
+        out.push(...wrapText(ev.text, FULL_COLS, '> '))
+        break
+      case 'assistant_text':
+        out.push(...wrapText(ev.text, FULL_COLS, '│ '))
+        break
+      case 'tool_use': {
+        const inp = ev.input as Record<string, unknown> | null
+        let suffix = ''
+        if (inp && typeof inp === 'object') {
+          const fp = inp.file_path ?? inp.path
+          const cmd = inp.command
+          const pat = inp.pattern
+          if (typeof fp === 'string') suffix = '(' + basename(fp) + ')'
+          else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 18) + ')'
+          else if (typeof pat === 'string') suffix = '(' + truncate(pat, 18) + ')'
+        }
+        out.push(`>> ${ev.name}${suffix}`)
+        break
+      }
+      case 'tool_result':
+        if (ev.isError) {
+          out.push(...wrapText('! ' + (ev.content || 'error'), FULL_COLS))
+        } else if (ev.content) {
+          const firstLine = ev.content.split('\n').find((l) => l.trim().length > 0)
+          if (firstLine) out.push(`  ${truncate(firstLine.trim(), FULL_COLS - 2)}`)
+        }
+        break
+      case 'result':
+        if (ev.isError) out.push('! turn failed')
+        break
+      case 'error':
+        out.push(...wrapText('! ' + ev.message, FULL_COLS))
+        break
+    }
+  }
+  return out
+}
+
+// Full-screen sidebar overlay: session list fills the whole display.
+function renderSidebar(snapshot: AppSnapshot, nav: { highlightedIndex: number }): { lines: ReturnType<typeof line>[] } {
+  const items = buildSidebarItems(snapshot)
+  const lines = [
+    line(`◆ ${snapshot.sessions.length} session${snapshot.sessions.length === 1 ? '' : 's'}`, 'meta'),
+    separator(),
+  ]
+
+  const max = items.length - 1
+  const highlighted = Math.min(nav.highlightedIndex, max)
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!
+    if (item.kind === 'new') {
+      lines.push(line(i === highlighted ? '[+ new session]' : ' + new session'))
+      continue
+    }
+    const dot = item.isActive ? '●' : (item.busy ? '◐' : '○')
+    const label = truncate(item.label, 32)
+    if (i === highlighted) {
+      lines.push(line(`[${dot} ${label}]`))
+    } else {
+      lines.push(line(` ${dot} ${label}`))
+    }
+  }
+
+  // Pad to 9 lines, action hint at bottom
+  while (lines.length < 9) lines.push(line(''))
+  lines.push(line('tap: open · 2tap: delete/back', 'meta'))
+
+  return { lines: lines.slice(0, 10) }
+}
+
+// Delete confirmation takes over the display.
+function renderDeleteConfirm(snapshot: AppSnapshot): { lines: ReturnType<typeof line>[] } | null {
+  const ca = snapshot.confirmAction
+  if (!ca || Date.now() >= ca.expiresAt) return null
+  const remaining = Math.ceil((ca.expiresAt - Date.now()) / 1000)
+  return {
+    lines: [
+      line(`Delete "${truncate(ca.title, 30)}"?`),
+      separator(),
+      line('This cannot be undone.'),
+      line(''),
+      line('tap: DELETE · 2tap: cancel', 'meta'),
+      line(`auto-cancel ${remaining}s…`, 'meta'),
+    ],
+  }
+}
+
+// Full-screen transcript renderer — 576px wide, ~38 chars/line, 8 content lines.
+function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof line>[] } {
+  const active = snapshot.sessions.find((s) => s.id === snapshot.activeSessionId)
+  const lines = []
+
+  // Header: session title + status
+  if (snapshot.error) {
+    lines.push(line(`◆ ! ${truncate(snapshot.error, 34)}`))
+  } else if (active && snapshot.activeBusy) {
+    const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
+    const status = lastTool && lastTool.kind === 'tool_use'
+      ? humanToolProgress(lastTool.name, lastTool.input)
+      : 'thinking…'
+    lines.push(line(`◆ ${truncate(active.title, 16)} · ${truncate(status, 18)}`))
+  } else if (active) {
+    const scrollTag = snapshot.sessionScrollOffset > 0 ? ` ▲${snapshot.sessionScrollOffset}` : ''
+    lines.push(line(`◆ ${truncate(active.title, 32)}${scrollTag}`))
+  } else {
+    lines.push(line('◆ CLAUDE CODE'))
+  }
+  lines.push(separator())
+
+  // Transcript body — 7 visible content lines
+  const allLines = transcriptToLines(snapshot.transcript)
+  const VISIBLE = 7
+  const totalLines = allLines.length
+  const maxOffset = Math.max(0, totalLines - VISIBLE)
+  const offset = Math.min(snapshot.sessionScrollOffset, maxOffset)
+  const startLine = Math.max(0, totalLines - VISIBLE - offset)
+  const visible = allLines.slice(startLine, startLine + VISIBLE)
+
+  for (const l of visible) lines.push(line(l))
+
+  // Pad to 9, action hint at line 10
+  while (lines.length < 9) lines.push(line(''))
+
+  const hint = snapshot.activeBusy
+    ? '2tap: menu'
+    : 'tap: talk · swipe: scroll · 2tap: menu'
+  lines.push(line(hint, 'meta'))
+
+  return { lines: lines.slice(0, 10) }
+}
 
 export const mainScreen: GlassScreen<AppSnapshot, AppActions> = {
-  display(snapshot) {
-    // Fallback rendering for environments where split mode isn't available.
-    // Shows the same minimal Claude Code launch screen so the user always
-    // sees something usable instead of an internal-looking debug string.
-    const count = snapshot.sessions.length
-    return {
-      lines: [
-        line('* CLAUDE CODE', 'meta'),
-        separator(),
-        line(''),
-        line(count === 0 ? '  no sessions yet' : `  ${count} session${count === 1 ? '' : 's'}`),
-        line(''),
-        line('  tap to start', 'meta'),
-        line('  swipe to scroll', 'meta'),
-      ],
+  display(snapshot, nav) {
+    // Delete confirmation modal overrides everything.
+    const deleteModal = renderDeleteConfirm(snapshot)
+    if (deleteModal) return deleteModal
+
+    // Sidebar overlay mode.
+    if (snapshot.sidebarVisible || !snapshot.activeSessionId) {
+      return renderSidebar(snapshot, nav)
     }
+
+    // Full-screen transcript.
+    return renderTranscript(snapshot)
   },
 
   action(action, nav, snapshot, ctx) {
-    const items = buildSidebarItems(snapshot)
-    const max = items.length - 1
-    if (max < 0) return nav
-
-    if (action.type === 'HIGHLIGHT_MOVE') {
-      return {
-        ...nav,
-        highlightedIndex: moveHighlight(nav.highlightedIndex, action.direction, max),
-      }
+    // Delete confirmation intercepts all actions.
+    if (snapshot.confirmAction && Date.now() < snapshot.confirmAction.expiresAt) {
+      if (action.type === 'SELECT_HIGHLIGHTED') { ctx.confirmPendingAction(); return nav }
+      if (action.type === 'GO_BACK') { ctx.cancelPendingAction(); return nav }
+      return nav
     }
 
-    if (action.type === 'SELECT_HIGHLIGHTED') {
-      const idx = Math.min(nav.highlightedIndex, max)
-      const item = items[idx]
-      if (!item) return nav
-      if (item.kind === 'new') {
-        ctx.startNewRecording()
-      } else if (item.id) {
-        if (item.id === snapshot.activeSessionId) {
-          // Tapping the already-active session starts a follow-up turn.
-          if (!snapshot.activeBusy) ctx.startTurnRecording()
-        } else {
-          // Tapping a different session opens it.
+    // SIDEBAR MODE: browsing sessions
+    if (snapshot.sidebarVisible || !snapshot.activeSessionId) {
+      const items = buildSidebarItems(snapshot)
+      const max = items.length - 1
+      if (max < 0) return nav
+
+      if (action.type === 'HIGHLIGHT_MOVE') {
+        return { ...nav, highlightedIndex: moveHighlight(nav.highlightedIndex, action.direction, max) }
+      }
+
+      if (action.type === 'SELECT_HIGHLIGHTED') {
+        const idx = Math.min(nav.highlightedIndex, max)
+        const item = items[idx]
+        if (!item) return nav
+        if (item.kind === 'new') {
+          ctx.startNewRecording()
+        } else if (item.id) {
           ctx.openSessionById(item.id)
         }
+        return nav
+      }
+
+      if (action.type === 'GO_BACK') {
+        const idx = Math.min(nav.highlightedIndex, max)
+        const item = items[idx]
+        // 2tap on session = delete
+        if (item && item.kind === 'session' && item.id) {
+          if (item.isActive) ctx.closeSession()
+          ctx.requestDeleteConfirmation(item.id, item.label)
+          return nav
+        }
+        // 2tap on [+ new] or empty = go back to transcript
+        if (snapshot.activeSessionId) {
+          ctx.hideSidebar()
+        }
+        return nav
       }
       return nav
     }
 
+    // TRANSCRIPT MODE: viewing active session
+    if (action.type === 'HIGHLIGHT_MOVE') {
+      // Swipe up/down = scroll transcript, 5 lines per swipe
+      const delta = action.direction === 'down' ? 5 : -5
+      ctx.scrollTranscript(delta)
+      return nav
+    }
+
+    if (action.type === 'SELECT_HIGHLIGHTED') {
+      // Tap = start follow-up recording (only if Claude isn't busy)
+      if (!snapshot.activeBusy) ctx.startTurnRecording()
+      return nav
+    }
+
     if (action.type === 'GO_BACK') {
-      // Double-tap closes the active session if there is one. The sidebar
-      // stays visible either way — there's no "exit to sidebar" anymore
-      // because the sidebar is always present in split mode.
-      if (snapshot.activeSessionId) ctx.closeSession()
+      // 2tap while scrolled up = jump to bottom
+      if (snapshot.sessionScrollOffset > 0) {
+        ctx.scrollTranscript(-snapshot.sessionScrollOffset)
+        return nav
+      }
+      // 2tap at bottom = open sidebar overlay
+      ctx.showSidebar()
       return nav
     }
 

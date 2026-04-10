@@ -4,18 +4,14 @@ import { Connect } from './screens/Connect'
 import { SettingsCard } from './screens/Settings'
 import { AppGlasses } from './glass/AppGlasses'
 
-// Companion pane lives on the phone WebView; AppGlasses runs the glasses UI.
-// They share the single store in src/store.ts so either side stays in sync.
-//
-// The /g/* routes exist purely so react-router accepts the navigate() calls
-// AppGlasses makes when the store mode changes — useGlasses uses
-// location.pathname to drive its screen router.
+// Companion pane = phone WebView. Dense dashboard, no card-soup.
+// AppGlasses runs the glasses UI — both share src/store.ts.
 
 function Shell() {
   return (
     <AppShell header={<NavHeader title="Claude Code G2" />}>
-      <Connect />
-      <div className="px-3 pb-8">
+      <div className="px-3 pt-2 pb-8 space-y-3">
+        <Connect />
         <SettingsCard />
       </div>
       <AppGlasses />

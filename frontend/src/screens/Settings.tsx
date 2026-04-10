@@ -1,31 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Card, Button, Select } from 'even-toolkit/web'
+import { Badge, Button, Select, Divider } from 'even-toolkit/web'
 import type { SelectOption } from 'even-toolkit/web'
 import { getSettings, saveSettings, type Settings as SettingsData, type PermissionMode } from '../api'
 import { useAppState } from '../store'
 
-const PERMISSION_MODES: { value: PermissionMode; label: string; hint: string }[] = [
-  {
-    value: 'bypassPermissions',
-    label: 'Skip all permissions (recommended)',
-    hint: '--dangerously-skip-permissions · zero prompts · perfect for hands-free voice flow',
-  },
-  {
-    value: 'acceptEdits',
-    label: 'Auto-accept edits only',
-    hint: 'auto-approves file edits but still gates Bash and other dangerous tools',
-  },
-  {
-    value: 'default',
-    label: 'Default (prompt every time)',
-    hint: 'Claude pauses for approval on dangerous actions — not usable hands-free',
-  },
+const PERM_OPTS: { value: PermissionMode; label: string; hint: string }[] = [
+  { value: 'bypassPermissions', label: 'Skip all (recommended)', hint: '--dangerously-skip-permissions' },
+  { value: 'acceptEdits', label: 'Auto-accept edits', hint: 'gates Bash + dangerous tools' },
+  { value: 'default', label: 'Prompt every time', hint: 'not hands-free' },
 ]
 
-const MODELS: { value: string; label: string }[] = [
-  { value: 'sonnet', label: 'Sonnet (fast, default)' },
-  { value: 'opus', label: 'Opus (smart, slower, pricier)' },
-  { value: 'haiku', label: 'Haiku (cheapest, weakest)' },
+const MODEL_OPTS: { value: string; label: string }[] = [
+  { value: 'sonnet', label: 'Sonnet (fast)' },
+  { value: 'opus', label: 'Opus (smart)' },
+  { value: 'haiku', label: 'Haiku (cheap)' },
 ]
 
 export function SettingsCard() {
@@ -36,10 +24,7 @@ export function SettingsCard() {
   const configured = Boolean(state.backendUrl && state.token && state.connection === 'ok')
 
   useEffect(() => {
-    if (!configured) {
-      setSettings(null)
-      return
-    }
+    if (!configured) { setSettings(null); return }
     void (async () => {
       try {
         const s = await getSettings()
@@ -54,8 +39,6 @@ export function SettingsCard() {
   async function update(partial: Partial<SettingsData>) {
     if (!settings) return
     setSaving(true)
-    // Optimistic UI: apply locally first so the dropdown reflects the choice
-    // even if the network call is slow.
     setSettings({ ...settings, ...partial })
     try {
       const next = await saveSettings(partial)
@@ -68,65 +51,53 @@ export function SettingsCard() {
     }
   }
 
-  if (!configured) {
-    return (
-      <Card className="p-4">
-        <h3 className="text-medium-title">Settings</h3>
-        <p className="text-normal-body text-text-dim">Connect first to load settings.</p>
-      </Card>
-    )
-  }
+  if (!configured) return null
 
   if (error && !settings) {
     return (
-      <Card className="p-4 space-y-2">
-        <h3 className="text-medium-title">Settings</h3>
-        <p className="text-normal-detail text-negative">{error}</p>
-        <Button variant="ghost" size="sm" onClick={() => setError(null)}>Dismiss</Button>
-      </Card>
+      <div className="rounded bg-negative/10 px-3 py-2 flex items-center justify-between">
+        <span className="text-normal-detail text-negative">{error}</span>
+        <Button variant="ghost" size="sm" onClick={() => setError(null)}>×</Button>
+      </div>
     )
   }
 
   if (!settings) {
-    return (
-      <Card className="p-4">
-        <h3 className="text-medium-title">Settings</h3>
-        <p className="text-normal-body text-text-dim">Loading...</p>
-      </Card>
-    )
+    return <div className="text-normal-detail text-text-dim">loading settings…</div>
   }
 
-  const currentPermLabel =
-    PERMISSION_MODES.find((m) => m.value === settings.permissionMode)?.hint ?? ''
+  const permHint = PERM_OPTS.find((m) => m.value === settings.permissionMode)?.hint ?? ''
 
   return (
-    <Card className="p-4 space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-medium-title">Settings</h3>
-        {saving ? <span className="text-normal-detail text-text-dim">saving…</span> : null}
+        <span className="text-normal-subtitle">Settings</span>
+        {saving && <Badge>saving…</Badge>}
       </div>
 
-      <div className="space-y-2">
-        <label className="text-normal-subtitle">Permission mode</label>
-        <Select
-          value={settings.permissionMode}
-          options={PERMISSION_MODES.map<SelectOption>((m) => ({ value: m.value, label: m.label }))}
-          onValueChange={(v) => void update({ permissionMode: v as PermissionMode })}
-        />
-        <p className="text-normal-detail text-text-dim">{currentPermLabel}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <label className="text-normal-detail text-text-dim">Permissions</label>
+          <Select
+            value={settings.permissionMode}
+            options={PERM_OPTS.map<SelectOption>((m) => ({ value: m.value, label: m.label }))}
+            onValueChange={(v) => void update({ permissionMode: v as PermissionMode })}
+          />
+          <div className="text-normal-detail text-text-dim font-mono text-xs">{permHint}</div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-normal-detail text-text-dim">Model</label>
+          <Select
+            value={settings.model}
+            options={MODEL_OPTS}
+            onValueChange={(v) => void update({ model: v })}
+          />
+        </div>
       </div>
 
-      <div className="space-y-2">
-        <label className="text-normal-subtitle">Model</label>
-        <Select
-          value={settings.model}
-          options={MODELS}
-          onValueChange={(v) => void update({ model: v })}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-normal-subtitle">Default project</label>
+      <div className="space-y-1">
+        <label className="text-normal-detail text-text-dim">Default project</label>
         <Select
           value={settings.defaultProjectName}
           options={settings.projects.map<SelectOption>((p) => ({ value: p.name, label: p.name }))}
@@ -134,9 +105,11 @@ export function SettingsCard() {
         />
       </div>
 
-      {error ? (
-        <p className="text-normal-detail text-negative">{error}</p>
-      ) : null}
-    </Card>
+      {error && (
+        <div className="text-normal-detail text-negative">{error}</div>
+      )}
+
+      <Divider />
+    </div>
   )
 }

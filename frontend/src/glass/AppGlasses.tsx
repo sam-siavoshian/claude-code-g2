@@ -9,6 +9,7 @@ import { isRecordingMode, store, useAppState } from '../store'
 import {
   bootstrap,
   createSession,
+  deleteSession as apiDeleteSession,
   getSession,
   sendTurn,
   SseClient,
@@ -17,21 +18,10 @@ import {
 import type { AppMode, SseEvent } from '../types'
 import { startCapture, stopCapture } from '../audio'
 
-// All recording flows return to the unified split view ('main') — the
-// sidebar is always present in that view, so there's no separate "go back
-// to the sidebar" mode anymore.
 function fallbackModeAfterRecording(): AppMode {
   return 'main'
 }
 
-// Map each AppMode to a distinct pathname. useGlasses only re-evaluates the
-// active screen when `location.pathname` changes, so we drive the "current
-// screen" by navigating whenever the store mode changes.
-//
-// 'unconfigured' is a transient init state, NOT a real screen. We deliberately
-// keep it out of the path-to-screen reverse lookup so /g/main always resolves
-// to the 'main' screen (and never to 'unconfigured', which would route to a
-// nonexistent screen and fall back to the stub display).
 const MODE_PATHS: Record<AppMode, string> = {
   unconfigured: '/g/main',
   main: '/g/main',
@@ -39,6 +29,8 @@ const MODE_PATHS: Record<AppMode, string> = {
   transcribing: '/g/transcribing',
   'picking-project': '/g/picking',
   'recording-turn': '/g/recording-turn',
+  'confirming-transcript': '/g/confirming',
+  answering: '/g/answering',
 }
 
 const PATH_TO_SCREEN: Record<string, string> = {
@@ -47,6 +39,8 @@ const PATH_TO_SCREEN: Record<string, string> = {
   '/g/transcribing': 'transcribing',
   '/g/picking': 'picking-project',
   '/g/recording-turn': 'recording-turn',
+  '/g/confirming': 'confirming-transcript',
+  '/g/answering': 'answering',
 }
 
 function pathToScreen(pathname: string): string {
@@ -57,9 +51,6 @@ export function AppGlasses() {
   const state = useAppState()
   const navigate = useNavigate()
 
-  // Drive react-router from the store mode. useGlasses watches
-  // location.pathname — navigating here is how our screen router learns
-  // that the mode changed.
   useEffect(() => {
     const target = MODE_PATHS[state.mode]
     if (target && window.location.pathname !== target) {
@@ -67,27 +58,33 @@ export function AppGlasses() {
     }
   }, [state.mode, navigate])
 
-  // Force a re-render at 4 Hz while recording so the elapsed-seconds label
-  // keeps ticking. The tick is NOT part of the snapshot — it only exists to
-  // drive React renders; the recording screen reads Date.now() directly.
   const [, setTick] = useState(0)
   useEffect(() => {
-    if (!isRecordingMode(state.mode)) return
+    const needsTick =
+      isRecordingMode(state.mode) ||
+      state.mode === 'transcribing' ||
+      state.mode === 'confirming-transcript' ||
+      state.confirmAction !== null
+    if (!needsTick) return
     const iv = setInterval(() => setTick((t) => (t + 1) & 0xff), 250)
     return () => clearInterval(iv)
-  }, [state.mode])
+  }, [state.mode, state.confirmAction])
 
-  // Single global SSE stream. The backend's publishTranscript already fans
-  // every transcript event to subscribers of the '*' channel too, so one
-  // connection covers BOTH sidebar-level events (session_created/updated/
-  // deleted) AND per-session transcript events.
-  //
-  // This deliberately replaces the earlier per-session SseClient. The
-  // per-session subscription used to open *after* openSession() ran, which
-  // meant Claude's assistant_text could fire between the POST response and
-  // the EventSource handshake completing — and be lost forever since SSE
-  // has no replay. The global stream is open from the moment credentials
-  // land, long before any session is created, so nothing gets missed.
+  // Error toast auto-clear after 4 seconds.
+  useEffect(() => {
+    if (!state.error) return
+    const t = setTimeout(() => store.setError(null), 4000)
+    return () => clearTimeout(t)
+  }, [state.error])
+
+  // Idle dimming re-render trigger.
+  useEffect(() => {
+    if (state.mode !== 'main') return
+    const t = setTimeout(() => setTick((t) => (t + 1) & 0xff), 31_000)
+    return () => clearTimeout(t)
+  }, [state.lastActivityAt, state.mode])
+
+  // Global SSE stream.
   useEffect(() => {
     if (!state.backendUrl || !state.token) return
     const client = new SseClient('*', (ev: SseEvent) => {
@@ -95,26 +92,39 @@ export function AppGlasses() {
         const g = ev.event
         if (g.kind === 'session_created') {
           store.upsertSession({
-            id: g.sessionId,
-            title: g.title,
-            projectName: g.projectName,
-            createdAt: g.ts,
-            lastActiveAt: g.ts,
+            id: g.sessionId, title: g.title, projectName: g.projectName,
+            createdAt: g.ts, lastActiveAt: g.ts,
           })
         } else if (g.kind === 'session_updated') {
           const existing = store.getState().sessions.find((s) => s.id === g.sessionId)
           if (existing) {
             store.upsertSession({
-              ...existing,
-              title: g.title,
-              lastActiveAt: g.lastActiveAt,
+              ...existing, title: g.title, lastActiveAt: g.lastActiveAt,
+              busy: g.busy ?? existing.busy,
             })
           }
         } else if (g.kind === 'session_deleted') {
           store.deleteSession(g.sessionId)
         }
       } else if (ev.kind === 'transcript') {
-        store.pushTranscriptEvent(ev.sessionId, ev.event)
+        const tevt = ev.event
+        if (
+          tevt.kind === 'question' ||
+          (tevt.kind === 'tool_use' && tevt.name === 'AskUserQuestion')
+        ) {
+          if (tevt.kind === 'tool_use') {
+            const inp = tevt.input as Record<string, unknown> | undefined
+            const questionText = typeof inp?.question === 'string' ? inp.question : String(inp?.question ?? 'Claude has a question')
+            const rawOpts = inp?.options
+            const options = Array.isArray(rawOpts) ? rawOpts.map(String) : []
+            store.setPendingQuestion({ toolUseId: tevt.toolUseId, text: questionText, options })
+            store.enterMode('answering')
+          } else if (tevt.kind === 'question') {
+            store.setPendingQuestion({ toolUseId: tevt.toolUseId, text: tevt.questionText, options: tevt.options })
+            store.enterMode('answering')
+          }
+        }
+        store.pushTranscriptEvent(ev.sessionId, tevt)
       }
     })
     return () => client.close()
@@ -125,8 +135,6 @@ export function AppGlasses() {
     void bootstrap()
   }, [state.backendUrl, state.token])
 
-  // Build the snapshot inline each render. `state` is a fresh object on every
-  // store update, so memoization would hit zero times anyway.
   const snapshot: AppSnapshot = {
     mode: state.mode,
     sessions: state.sessions,
@@ -141,12 +149,17 @@ export function AppGlasses() {
     sessionScrollOffset: state.sessionScrollOffset,
     error: state.error,
     connection: state.connection,
+    confirmAction: state.confirmAction,
+    lastActivityAt: state.lastActivityAt,
+    confirmTranscriptFlow: state.confirmTranscriptFlow,
+    pendingQuestion: state.pendingQuestion,
+    scrollingTranscript: state.scrollingTranscript,
+    sidebarVisible: state.sidebarVisible,
   }
   const snapshotRef = useRef(snapshot)
   snapshotRef.current = snapshot
   const getSnapshot = useCallback(() => snapshotRef.current, [])
 
-  // Recording helpers shared by new-session and follow-up-turn flows.
   async function beginRecording(mode: 'recording-new' | 'recording-turn') {
     store.enterMode(mode)
     try {
@@ -173,6 +186,53 @@ export function AppGlasses() {
     return text
   }
 
+  // Execute confirmed transcript — either create new session or send follow-up.
+  async function executeTranscriptFlow(flow: 'new' | 'turn') {
+    store.setConfirmTranscriptFlow(null)
+    if (flow === 'new') {
+      const text = store.getState().pendingTranscript
+      if (!text) { store.enterMode('main'); return }
+      // Use default project — no picker. If no default and >1 project, fall back to picker.
+      const { defaultProjectName, projects } = store.getState()
+      const projectName = defaultProjectName ?? projects[0]
+      if (!projectName) {
+        // Edge case: no projects configured at all
+        store.setError('No project configured')
+        store.enterMode('main')
+        return
+      }
+      if (!defaultProjectName && projects.length > 1) {
+        // Multiple projects, no default — show picker as fallback
+        store.enterMode('picking-project')
+        return
+      }
+      try {
+        const summary = await createSession(projectName, text)
+        store.upsertSession(summary)
+        store.openSession(summary.id, [{ kind: 'user', text, ts: Date.now() }])
+        store.setPendingTranscript(null)
+        store.setSidebarVisible(false)
+      } catch (err) {
+        console.error('[glass] createSession failed:', err)
+        store.setError('Create session failed')
+        store.enterMode('main')
+      }
+    } else {
+      const sid = store.getState().activeSessionId
+      const text = store.getState().pendingTranscript
+      if (!sid || !text) { store.enterMode('main'); return }
+      try {
+        await sendTurn(sid, text)
+        store.setPendingTranscript(null)
+        store.enterMode('main')
+      } catch (err) {
+        console.error('[glass] follow-up turn failed:', err)
+        store.setError('Turn failed')
+        store.enterMode('main')
+      }
+    }
+  }
+
   const actions = useRef<AppActions>({
     startNewRecording() {
       void beginRecording('recording-new')
@@ -182,17 +242,18 @@ export function AppGlasses() {
     },
     cancelRecording() {
       void stopCapture().catch(() => {})
+      store.setPendingTranscript(null)
+      store.setConfirmTranscriptFlow(null)
       store.enterMode(fallbackModeAfterRecording())
     },
     async stopNewRecordingAndTranscribe() {
       try {
         const text = await finishRecordingToText()
-        if (text == null) {
-          store.enterMode('main')
-          return
-        }
+        if (text == null) { store.enterMode('main'); return }
         store.setPendingTranscript(text)
-        store.enterMode('picking-project')
+        store.setConfirmTranscriptFlow('new')
+        store.enterMode('confirming-transcript')
+        // No auto-send timer. User must explicitly tap to confirm.
       } catch (err) {
         console.error('[glass] transcribe failed:', err)
         store.setError('Transcription failed')
@@ -201,18 +262,13 @@ export function AppGlasses() {
     },
     async stopTurnRecordingAndSend() {
       const sid = store.getState().activeSessionId
-      if (!sid) {
-        store.enterMode('main')
-        return
-      }
+      if (!sid) { store.enterMode('main'); return }
       try {
         const text = await finishRecordingToText()
-        if (text == null) {
-          store.enterMode('main')
-          return
-        }
-        await sendTurn(sid, text)
-        store.enterMode('main')
+        if (text == null) { store.enterMode('main'); return }
+        store.setPendingTranscript(text)
+        store.setConfirmTranscriptFlow('turn')
+        store.enterMode('confirming-transcript')
       } catch (err) {
         console.error('[glass] follow-up turn failed:', err)
         store.setError('Turn failed')
@@ -221,16 +277,11 @@ export function AppGlasses() {
     },
     async pickProject(projectName: string) {
       const prompt = store.getState().pendingTranscript
-      if (!prompt) {
-        store.enterMode('main')
-        return
-      }
+      if (!prompt) { store.enterMode('main'); return }
       try {
         const summary = await createSession(projectName, prompt)
         store.upsertSession(summary)
-        store.openSession(summary.id, [
-          { kind: 'user', text: prompt, ts: Date.now() },
-        ])
+        store.openSession(summary.id, [{ kind: 'user', text: prompt, ts: Date.now() }])
         store.setPendingTranscript(null)
       } catch (err) {
         console.error('[glass] createSession failed:', err)
@@ -238,10 +289,20 @@ export function AppGlasses() {
         store.enterMode('main')
       }
     },
+    async deleteSessionById(id: string) {
+      store.deleteSession(id)
+      try { await apiDeleteSession(id) } catch (err) {
+        console.error('[glass] deleteSession failed:', err)
+        store.setError('Delete failed')
+      }
+    },
     async openSessionById(id: string) {
+      const cached = store.getCachedTranscript(id)
+      if (cached) store.openSession(id, cached)
       try {
         const session = await getSession(id)
         store.openSession(id, session.transcript)
+        store.setSidebarVisible(false)
       } catch (err) {
         console.error('[glass] getSession failed:', err)
         store.setError('Load session failed')
@@ -254,6 +315,48 @@ export function AppGlasses() {
       const cur = store.getState().sessionScrollOffset
       store.setSessionScrollOffset(cur + delta)
     },
+    showSidebar() {
+      store.setSidebarVisible(true)
+    },
+    hideSidebar() {
+      store.setSidebarVisible(false)
+    },
+
+    requestDeleteConfirmation(sessionId: string, title: string) {
+      store.setConfirmAction({ kind: 'delete', sessionId, title, expiresAt: Date.now() + 5000 })
+    },
+    confirmPendingAction() {
+      const ca = store.getState().confirmAction
+      if (!ca) return
+      if (ca.kind === 'delete') {
+        store.setConfirmAction(null)
+        void actions.current.deleteSessionById(ca.sessionId)
+      }
+    },
+    cancelPendingAction() {
+      store.setConfirmAction(null)
+    },
+
+    confirmTranscript() {
+      const flow = store.getState().confirmTranscriptFlow
+      if (flow) void executeTranscriptFlow(flow)
+    },
+    cancelTranscript() {
+      store.setPendingTranscript(null)
+      store.setConfirmTranscriptFlow(null)
+      store.enterMode('main')
+    },
+
+    async answerQuestion(answer: string) {
+      const sid = store.getState().activeSessionId
+      store.setPendingQuestion(null)
+      store.enterMode('main')
+      if (!sid) return
+      try { await sendTurn(sid, answer) } catch (err) {
+        console.error('[glass] answerQuestion failed:', err)
+        store.setError('Answer failed')
+      }
+    },
   })
 
   const handleGlassAction = useCallback(
@@ -265,10 +368,17 @@ export function AppGlasses() {
     [],
   )
 
-  // Map the react-router pathname back to a screen key. Called by useGlasses
-  // whenever location.pathname changes.
-  const deriveScreen = useCallback((pathname: string) => {
-    return pathToScreen(pathname)
+  const deriveScreen = useCallback((pathname: string) => pathToScreen(pathname), [])
+
+  // Dynamic page mode: full-screen text when a session is active (no sidebar
+  // eating 31% of screen), split view only for session browser (no active session).
+  const getPageMode = useCallback((screen: string) => {
+    if (screen !== 'main') return 'text' as const
+    const snap = snapshotRef.current
+    // Split view for browsing sessions (sidebar visible, no active session content)
+    if (!snap.activeSessionId || snap.sidebarVisible) return 'split' as const
+    // Full-screen transcript for active session
+    return 'text' as const
   }, [])
 
   useGlasses({
@@ -279,10 +389,7 @@ export function AppGlasses() {
     deriveScreen,
     appName: 'CLAUDE CODE G2',
     splash: appSplash,
-    // 'main' renders as a split layout (sidebar + chat). The recording /
-    // transcribing / picking screens take over the full screen in text mode
-    // for maximum focus.
-    getPageMode: (screen) => (screen === 'main' ? 'split' : 'text'),
+    getPageMode,
   })
 
   return null
