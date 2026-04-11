@@ -59,11 +59,32 @@ function humanToolProgress(name: string, input: unknown): string {
   }
 }
 
+// #2: Collapse completed tool calls. A tool_use followed by a non-error
+// tool_result becomes a single line: "✓ Read(file.ts)" instead of 2 lines.
+// Errors stay expanded. The last tool_use (if no result yet) stays as ">> ..."
+// to show Claude is currently running it.
+//
+// #3: Turn separators. A "───" line between user turns so you can scan
+// "Claude did 3 things in this turn" at a glance.
 function transcriptToLines(transcript: TranscriptEvent[]): string[] {
   const out: string[] = []
+
+  // Build a set of tool_use IDs that have a successful (non-error) result.
+  const completedTools = new Set<string>()
+  const errorTools = new Set<string>()
+  for (const ev of transcript) {
+    if (ev.kind === 'tool_result') {
+      if (ev.isError) errorTools.add(ev.toolUseId)
+      else completedTools.add(ev.toolUseId)
+    }
+  }
+
+  let lastKind = ''
   for (const ev of transcript) {
     switch (ev.kind) {
       case 'user':
+        // #3: Turn separator before each user turn (except the first)
+        if (out.length > 0) out.push('───')
         out.push(...wrapText(ev.text, FULL_COLS, '> '))
         break
       case 'assistant_text':
@@ -80,15 +101,22 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
           else if (typeof cmd === 'string') suffix = '(' + truncate(cmd, 28) + ')'
           else if (typeof pat === 'string') suffix = '(' + truncate(pat, 28) + ')'
         }
-        out.push(`>> ${ev.name}${suffix}`)
+        // #2: Collapse completed tools to 1 line with ✓ prefix.
+        if (completedTools.has(ev.toolUseId)) {
+          out.push(`✓ ${ev.name}${suffix}`)
+        } else if (errorTools.has(ev.toolUseId)) {
+          out.push(`✗ ${ev.name}${suffix}`)
+        } else {
+          // Still running — show as active
+          out.push(`>> ${ev.name}${suffix}`)
+        }
         break
       }
       case 'tool_result':
+        // #2: Only show error content. Successful results are collapsed
+        // into the tool_use line above (✓ prefix).
         if (ev.isError) {
           out.push(...wrapText('! ' + (ev.content || 'error'), FULL_COLS))
-        } else if (ev.content) {
-          const firstLine = ev.content.split('\n').find((l) => l.trim().length > 0)
-          if (firstLine) out.push(`  ${truncate(firstLine.trim(), FULL_COLS - 2)}`)
         }
         break
       case 'result':
@@ -98,6 +126,7 @@ function transcriptToLines(transcript: TranscriptEvent[]): string[] {
         out.push(...wrapText('! ' + ev.message, FULL_COLS))
         break
     }
+    lastKind = ev.kind
   }
   return out
 }
@@ -199,10 +228,11 @@ function renderTranscript(snapshot: AppSnapshot): { lines: ReturnType<typeof lin
   // Scroll bar for the header
   const bar = scrollBar(totalLines, VISIBLE, offset)
 
+  // #5: Connection loss shown in header — highest priority after errors.
   // Header: session title + status + scroll bar
-  // When busy: ◐ spinning indicator + tool progress
-  // When done: ✓ DONE prominently in header — unmissable signal to talk again
-  if (snapshot.error) {
+  if (snapshot.connection === 'error') {
+    lines.push(line('! disconnected — check backend'))
+  } else if (snapshot.error) {
     lines.push(line(`◆ ! ${truncate(snapshot.error, 40)}`))
   } else if (active && snapshot.activeBusy) {
     const lastTool = [...snapshot.transcript].reverse().find((e) => e.kind === 'tool_use')
