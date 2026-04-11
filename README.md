@@ -1,191 +1,153 @@
-# Claude Code G2
+# Claude Code G2 — Voice-Controlled Claude Code on AR Glasses
 
-Run Claude Code from your **Even Realities G2** AR glasses.
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](https://www.typescriptlang.org/)
+[![Bun](https://img.shields.io/badge/Runtime-Bun-black.svg)](https://bun.sh)
+[![Even Realities G2](https://img.shields.io/badge/Hardware-Even%20Realities%20G2-orange.svg)](https://www.evenrealities.com)
 
-Press the temple, say what you want done, watch Claude stream the transcript onto your HUD. File edits, shell commands, web searches — all hands-free.
+Run **Claude Code** hands-free from your **Even Realities G2 AR glasses**. Tap the temple, speak your coding task, and watch Claude stream the result onto your heads-up display. File edits, shell commands, code generation — all by voice while your hands stay on the keyboard or in your pockets.
+
+> **TL;DR:** A voice-first AI coding assistant that runs on smart glasses. Think GitHub Copilot but on your face, controlled entirely by voice and temple taps. Uses your existing Claude Max/Pro subscription — no API key needed.
 
 ```
 ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
 │  G2 glasses  │◄────►│  Your phone  │◄────►│  Your Mac    │
 │  mic + HUD   │ BT5  │  (WebView)   │ HTTP │  claude CLI  │
 └──────────────┘      └──────────────┘      └──────────────┘
-                                             billed against
-                                             your Claude Max sub
+                                             uses your Claude
+                                             Max/Pro subscription
 ```
 
-**Why this works without paying for API credits:** the Mac backend spawns the `claude` CLI in headless stream-json mode, which bills against your Claude Pro/Max subscription via the CLI's existing `claude auth login`. No `ANTHROPIC_API_KEY` required.
+## Why?
+
+Claude Code in the terminal is amazing, but you have to look at your screen. With Claude Code G2, the AI output floats in your field of vision while you're doing other things — walking, whiteboarding, pair-programming, or just thinking with your hands free.
+
+**No API key required.** The backend spawns the `claude` CLI in headless stream-json mode, which bills against your Claude Pro/Max subscription via `claude auth login`. This is the same protocol the Claude Agent SDK uses internally, but billed against your existing subscription instead of per-token API pricing.
+
+---
+
+## Demo
+
+<!-- Replace with your own recording -->
+<!-- ![Claude Code G2 Demo](docs/demo.gif) -->
+*Record a 15-second clip of the glasses in action and drop it here.*
 
 ---
 
 ## Features
 
-- **Voice-first.** Tap temple → speak → tap to stop. Whisper transcribes, Claude runs, HUD streams the result.
-- **Multi-session.** Sidebar of past sessions, scroll through, jump back in to a previous turn. Persisted to disk.
-- **Project-aware.** Whitelist the dirs Claude can work in; pick one per voice command.
-- **Streaming transcript.** Tool calls, file edits, results — all shown live on the HUD.
-- **Zero API key.** Uses your Claude Max subscription via the local CLI.
-- **Secured.** Bearer token generated on first boot, constant-time compared on every request.
+- **Voice-first coding.** Tap → speak → tap. Whisper transcribes, Claude executes, HUD streams the result. No typing needed.
+- **Full-screen transcript.** See Claude's full response on a 576x288 green HUD — tool calls, file edits, code output, all live-streamed.
+- **Multi-session.** Browse past sessions in a sidebar overlay, switch between them instantly with cached transcripts.
+- **Project-aware.** Whitelist directories Claude can work in. Sessions auto-use your default project.
+- **Smart HUD.** Collapsed tool calls (`✓ Read(file.ts)`), turn separators, scroll bar, busy/done/idle indicators, connection loss warnings.
+- **Claude pixel-art logo.** Because even your HUD deserves branding.
+- **Zero API key.** Uses your Claude Max subscription via the local CLI. No `ANTHROPIC_API_KEY` needed.
+- **Secured.** Bearer token auth, generated on first boot, constant-time compared.
+- **One-command setup.** `./dev.sh` installs everything, starts everything, prints a QR code.
 
 ---
 
-## Requirements
-
-You only need these two to be installed manually — `./dev.sh` takes care of the rest (bun, cloudflared, qrencode).
-
-- **macOS** with a Claude Max / Pro subscription logged in via `claude auth login` ([install](https://code.claude.com))
-- **[Homebrew](https://brew.sh)** (used by the dev script to install tunnel + QR tools)
-
-And for the voice loop:
-
-- **OpenAI API key** for Whisper transcription (~$0.006 / minute)
-- **Even Realities G2 glasses** + the Even Realities App on your phone
-- Optional: [**evenhub-simulator**](https://www.npmjs.com/package/@evenrealities/evenhub-simulator) for desktop dry-runs
-
----
-
-## Install
+## Quick Start
 
 ```bash
 git clone https://github.com/sam-siavoshian/claude-code-g2.git
 cd claude-code-g2
-
-# backend
-cd backend && bun install && cd ..
-
-# frontend
-cd frontend && bun install && cd ..
+./dev.sh
 ```
+
+That's it. The script installs deps, starts the backend + tunnel + frontend, and prints a QR code. Scan it with the Even Realities App.
+
+### Requirements
+
+- **macOS** with Claude Max/Pro logged in via `claude auth login` ([install Claude Code](https://code.claude.com))
+- **[Homebrew](https://brew.sh)** (the dev script uses it to install `bun`, `cloudflared`, `qrencode`)
+- **OpenAI API key** for Whisper transcription (~$0.006/min) — set in `backend/.env`
+- **Even Realities G2 glasses** + the Even Realities App on your phone
+- Optional: [evenhub-simulator](https://www.npmjs.com/package/@evenrealities/evenhub-simulator) for desktop testing without glasses
 
 ---
 
 ## Configure
 
-### Backend env (`backend/.env`)
+### `backend/.env`
 
 ```bash
-OPENAI_API_KEY=sk-...   # required, used for Whisper transcription
+OPENAI_API_KEY=sk-...   # required for Whisper
 PORT=8787               # optional, default 8787
 ```
 
-### Backend config (`~/.cc-g2/config.json`)
-
-Auto-generated on first boot with a random bearer token. Edit the `projects` array to whitelist which directories Claude can work in:
+### `~/.cc-g2/config.json` (auto-generated on first boot)
 
 ```json
 {
-  "token": "<auto-generated, treat like an SSH key>",
+  "token": "<auto-generated bearer token>",
   "projects": [
-    { "name": "g2",     "path": "/Users/you/code/claude-code-g2" },
-    { "name": "arena",  "path": "/Users/you/code/arena" }
+    { "name": "myapp", "path": "/Users/you/code/myapp" }
   ],
-  "defaultProjectName": "g2",
-  "claudeBinary": "claude"
+  "defaultProjectName": "myapp",
+  "permissionMode": "bypassPermissions",
+  "model": "sonnet"
 }
 ```
 
-You say *"new session in arena"*, pick "arena" on the HUD, and Claude spawns `cwd=/Users/you/code/arena`.
-
----
-
-## Run
-
-**One command does everything:**
-
-```bash
-./dev.sh
-```
-
-The script:
-1. Installs missing tools (`bun`, `cloudflared`, `qrencode`) via Homebrew / curl
-2. Runs `bun install` in `backend/` and `frontend/` if needed
-3. Frees ports 8787 and 5173, kills stale cloudflared processes
-4. Starts the backend, extracts the bearer token
-5. Opens a Cloudflare quick tunnel, extracts the public URL
-6. Starts the Vite dev server
-7. Verifies the tunnel end-to-end (health + auth + rejection)
-8. Prints a **QR code** with `?backend=<tunnel>&token=<bearer>` query params
-
-Scan the QR with the Even Realities App. The companion pane **auto-fills** both fields and connects — no copy-paste. Green dot → ready. Put on the glasses.
-
-`Ctrl-C` stops the backend, tunnel, and Vite together.
-
-### Manual run (if you want individual terminals)
-
-```bash
-# 1. backend
-cd backend && bun run dev
-
-# 2. tunnel
-cloudflared tunnel --url http://localhost:8787
-
-# 3. frontend
-cd frontend && bun run dev
-
-# 4. sideload into the Even Realities App
-cd frontend && bunx @evenrealities/evenhub-cli qr --url "http://<your-lan-ip>:5173"
-```
-
-### Dry-run without hardware
-
-```bash
-npm i -g @evenrealities/evenhub-simulator
-evenhub-simulator http://localhost:5173
-```
+The `token` is your auth key — treat it like an SSH private key. The `projects` array controls which directories Claude can access.
 
 ---
 
 ## Controls
 
-| Gesture                | Action                                     |
-|------------------------|--------------------------------------------|
-| Swipe up / down        | Move highlight · scroll transcript         |
-| Single tap             | Select · start or stop recording           |
-| Double tap             | Go back · close session · cancel recording |
+| Gesture | In transcript | In sidebar |
+|---------|--------------|------------|
+| **Swipe up/down** | Scroll transcript (5 lines) | Move highlight |
+| **Tap** | Start voice follow-up | Open session / new recording |
+| **Double-tap** | Jump to bottom, or open menu | Delete session / go back |
 
-**Typical flow:**
+### Typical flow
 
-1. Sidebar → highlight `+ New session` → single tap → starts listening
-2. Speak: *"add a unit test for the parseTimestamp function in utils.ts"*
-3. Single tap → transcribes → pick a project
-4. Session opens → watch Claude work → single tap to speak a follow-up
+1. **New session:** Sidebar → `[+ new]` → tap → speak → tap to stop → confirm → Claude works
+2. **Follow-up:** Transcript view → tap → speak → tap to stop → confirm → Claude continues
+3. **Browse:** Swipe up/down to scroll through Claude's output
+4. **Switch sessions:** Double-tap → sidebar overlay → tap a session
+5. **Delete:** Sidebar → double-tap on a session → confirm
 
 ---
 
-## How it works
+## How It Works
 
 ```
-┌────────────────────────────┐
-│  frontend/ (Vite + React)  │
-│  runs in phone WebView     │
-│  • glass/   per-screen UI  │
-│  • store.ts useSyncExt.    │
-│  • audio.ts mic capture    │
-└────────────┬───────────────┘
-             │ HTTPS + Bearer token
-             ▼
-┌────────────────────────────┐
-│  backend/ (Bun + Express)  │
-│  • transcribe   → Whisper  │
-│  • SessionManager          │
-│  • ClaudeCodeProc          │
-│        │                   │
-│        │ spawn             │
-│        ▼                   │
-│  claude -p                 │
-│    --input-format stream-json
+┌──────────────────────────────┐
+│  frontend/ (Vite + React)    │
+│  runs in phone WebView       │
+│  • glass/    HUD screens     │
+│  • store.ts  shared state    │
+│  • audio.ts  mic capture     │
+└──────────────┬───────────────┘
+               │ HTTPS + Bearer token
+               ▼
+┌──────────────────────────────┐
+│  backend/ (Bun + Express)    │
+│  • /transcribe  → Whisper    │
+│  • /sessions    → CRUD       │
+│  • /events      → SSE stream │
+│  • SessionManager            │
+│        │ spawn               │
+│        ▼                     │
+│  claude -p                   │
+│    --input-format stream-json│
 │    --output-format stream-json
-│    --permission-mode acceptEdits
-│    --session-id <uuid>     │
-└────────────────────────────┘
+│    --session-id <uuid>       │
+│    --dangerously-skip-perms  │
+└──────────────────────────────┘
 ```
 
-The backend spawns the `claude` CLI in its headless stream-json mode, writes user turns as JSON lines to stdin, and parses Claude's events on stdout. Each `assistant_text`, `tool_use`, and `tool_result` event is persisted to `~/.cc-g2/sessions.json` and pushed to the HUD via Server-Sent Events.
+The backend spawns the `claude` CLI in headless mode, writes user turns as JSON to stdin, and parses events from stdout. Each event (assistant text, tool call, result) is persisted to `~/.cc-g2/sessions.json` and pushed to the phone via Server-Sent Events, which drives the glasses HUD.
 
-The frontend is built on [`even-toolkit`](https://github.com/fabioglimb/even-toolkit), which provides the per-screen glasses router, chat display builder, and nav helpers. See [`EVEN_HUB_SDK.md`](./EVEN_HUB_SDK.md) for the full Even Hub SDK reference used to drive the HUD.
+The frontend is built on [even-toolkit](https://github.com/nicedoc/even-toolkit) — the per-screen glasses router, display builders, and nav helpers for Even Realities hardware.
 
 ---
 
-## Project layout
+## Project Layout
 
 ```
 backend/src/
@@ -196,53 +158,89 @@ backend/src/
   transcribe.ts           Whisper endpoint
   sessions/
     store.ts              Disk-backed session store
-    claudeProc.ts         Spawns `claude -p`, parses stream-json
-    manager.ts            Orchestrator
+    claudeProc.ts         Spawns claude CLI, parses stream-json
+    manager.ts            Session orchestrator
 
 frontend/src/
-  App.tsx                 Companion pane + glasses mount
-  store.ts                Shared store
+  App.tsx                 Companion pane (phone UI)
+  store.ts                Shared state (useSyncExternalStore)
   api.ts                  authFetch + SseClient
-  audio.ts                Glasses mic capture
-  screens/Connect.tsx     Phone-side setup screen
+  audio.ts                Glasses mic capture + PCM normalization
+  screens/
+    Connect.tsx           Phone-side setup + session dashboard
+    Settings.tsx          Permission mode, model, default project
   glass/
-    AppGlasses.tsx        useGlasses hook + action side effects
+    AppGlasses.tsx        useGlasses hook + all action side effects
+    splitView.ts          Split-mode renderer (sidebar browser)
     selectors.ts          Screen router
+    logo.ts               Claude pixel-art loader
     screens/
-      sidebar.ts
-      recording.ts
-      picking.ts
-      session.ts
+      main.ts             Full-screen transcript + sidebar overlay
+      recording.ts        Voice recording (3-line minimal)
+      confirming.ts       Whisper result confirmation
+      picking.ts          Project picker (fallback)
+      answering.ts        Claude question answer picker
 ```
 
 ---
 
 ## Security
 
-- The bearer token lives in `~/.cc-g2/config.json` (mode `0600`) — treat it like an SSH key. Anyone with it can run shell commands on your Mac via Claude Code's `Bash` tool.
-- Claude Code runs with `--permission-mode acceptEdits` so it can work without human-in-the-loop gating. Restrict the `projects` whitelist to dirs you trust.
-- Cloudflare tunnels use HTTPS. CORS is permissive because the bearer token is the real auth.
-- If the token leaks, delete it from `~/.cc-g2/config.json` and restart the backend; a new one is generated.
+- Bearer token in `~/.cc-g2/config.json` (file mode `0600`). Anyone with this token can run shell commands on your Mac via Claude's Bash tool.
+- Claude runs with `--dangerously-skip-permissions` by default for hands-free voice flow. Restrict the `projects` whitelist to trusted directories.
+- Cloudflare tunnel provides HTTPS. Bearer token is the real auth layer, not CORS.
+- If the token leaks, delete `~/.cc-g2/config.json` and restart — a new token auto-generates.
+
+---
+
+## Manual Run (without `./dev.sh`)
+
+```bash
+# terminal 1: backend
+cd backend && bun run dev
+
+# terminal 2: tunnel
+cloudflared tunnel --url http://127.0.0.1:8787
+
+# terminal 3: frontend
+cd frontend && bun run dev
+
+# terminal 4: sideload
+cd frontend && bunx @evenrealities/evenhub-cli qr --url "http://<lan-ip>:5173"
+```
+
+### Desktop testing (no glasses)
+
+```bash
+bun i -g @evenrealities/evenhub-simulator
+evenhub-simulator http://localhost:5173
+```
 
 ---
 
 ## Contributing
 
-PRs welcome. Keep it small and focused.
+PRs welcome. Keep them small and focused.
 
 ```bash
-# backend
 cd backend && bun run typecheck
-
-# frontend
 cd frontend && bun run build
 ```
 
-Before opening a PR:
-- Run both typechecks above.
-- If you touched the glasses UI, sanity-check with the simulator.
-- Match the existing code style; no trailing whitespace, no noisy comments.
-- Commits should be atomic with a short imperative subject (e.g. `fix: sticky-bottom scroll on session screen`).
+- Run both checks before opening a PR.
+- If you touched the glasses UI, test with the simulator.
+- Atomic commits, imperative subject line (`fix: ...`, `feat: ...`).
+
+---
+
+## Built With
+
+- [Claude Code CLI](https://code.claude.com) — AI coding agent
+- [Even Realities G2](https://www.evenrealities.com) — AR smart glasses
+- [even-toolkit](https://github.com/nicedoc/even-toolkit) — glasses UI framework
+- [Bun](https://bun.sh) — JavaScript runtime
+- [OpenAI Whisper](https://openai.com/research/whisper) — speech-to-text
+- [Cloudflare Tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) — secure HTTPS tunnel
 
 ---
 
@@ -250,13 +248,11 @@ Before opening a PR:
 
 [MIT](./LICENSE) © Saam Siavoshian
 
----
-
 ## Author
 
-Saam Siavoshian
-X: [@samsiavoshian](https://x.com/samsiavoshian)
-Email: samsiavoshian2009@gmail.com
+**Saam Siavoshian**
+- X: [@samsiavoshian](https://x.com/samsiavoshian)
+- Email: samsiavoshian2009@gmail.com
 
 ---
 
