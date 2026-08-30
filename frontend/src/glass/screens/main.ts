@@ -1,6 +1,7 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router'
 import { line, separator } from 'even-toolkit/types'
 import { moveHighlight } from 'even-toolkit/glass-nav'
+import { slidingWindowStart } from 'even-toolkit/glass-display-builders'
 import type { AppSnapshot, AppActions } from '../shared'
 import { buildSidebarItems } from '../splitView'
 import type { TranscriptEvent } from '../../types'
@@ -142,7 +143,9 @@ function renderSidebar(snapshot: AppSnapshot, nav: { highlightedIndex: number })
   const max = items.length - 1
   const highlighted = Math.min(nav.highlightedIndex, max)
 
-  for (let i = 0; i < items.length; i++) {
+  const VISIBLE = 7
+  const start = slidingWindowStart(highlighted, items.length, VISIBLE)
+  for (let i = start; i < Math.min(items.length, start + VISIBLE); i++) {
     const item = items[i]!
     if (item.kind === 'new') {
       lines.push(line(i === highlighted ? '[+ new session]' : ' + new session'))
@@ -159,7 +162,8 @@ function renderSidebar(snapshot: AppSnapshot, nav: { highlightedIndex: number })
 
   // Pad to 9 lines, action hint at bottom
   while (lines.length < 9) lines.push(line(''))
-  lines.push(line('tap: open · 2tap: delete/back', 'meta'))
+  const more = (start > 0 ? '▲' : ' ') + (start + VISIBLE < items.length ? '▼' : ' ')
+  lines.push(line(`${more} tap: open · 2tap: delete/back`, 'meta'))
 
   return { lines: lines.slice(0, 10) }
 }
